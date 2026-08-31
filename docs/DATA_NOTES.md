@@ -134,9 +134,18 @@ derived date wins on conflict; title only as a last resort.
     │   └────────────────── B = Treasury bond (bills use LKA…)
     └────────────────────── country
 
-So a QuotesTBond row (tenor + maturity serial) maps deterministically to an
-ISIN: build `LKB` + tenor + maturity, append the computed check digit.
-Cross-check against ISINs actually seen in volumes files by maturity date.
+**But beware**: the QuotesTBond "Maturity Period (Years)" column does NOT
+match the tenor digits inside real ISINs (LKB00934F154 encodes tenor 9, the
+column says 8; LKB01136H151 encodes 11, the column says 12), so an ISIN
+cannot be synthesised from the quote sheet. Real ISINs are learned from the
+volumes and trade-summary files; quote rows are joined to them by maturity
+date, with the coupon as tie-break when two bonds share a maturity.
+
+The quote sheet also carries the 2023-restructuring **step-coupon bonds**
+("12%9%2027A", "12.4%7.5%5%2029A" — several rates chained before the year).
+Their quotes look administered (bid/offer pinned at 13%/12% almost every
+row) but they are real bonds; coupon_pct records the first step and the
+full label goes into bonds.notes.
 
 ## Secondary Market Trade Summary (real PDF, one page)
 

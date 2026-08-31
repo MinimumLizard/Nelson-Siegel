@@ -116,22 +116,27 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
-def upsert_bond(conn, isin, coupon_pct, maturity_date, tenor_years, first_seen_date):
+def upsert_bond(conn, isin, coupon_pct, maturity_date, tenor_years, first_seen_date,
+                notes=None):
     """Insert a bond, or fill in blanks on an existing row.
 
-    COALESCE(new, old) keeps an already-known coupon if a later file
-    doesn't provide one; first_seen_date only ever moves earlier.
+    COALESCE(old, new) keeps an already-known coupon if a later file
+    doesn't provide one; first_seen_date only ever moves earlier. `notes`
+    records e.g. the full step-coupon label ("12%9%2027A") of restructured
+    bonds, whose single coupon_pct only holds the first step.
     """
     conn.execute(
-        """INSERT INTO bonds (isin, coupon_pct, maturity_date, tenor_years, first_seen_date)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO bonds (isin, coupon_pct, maturity_date, tenor_years,
+                              first_seen_date, notes)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(isin) DO UPDATE SET
                coupon_pct      = COALESCE(bonds.coupon_pct, excluded.coupon_pct),
                maturity_date   = COALESCE(bonds.maturity_date, excluded.maturity_date),
                tenor_years     = COALESCE(bonds.tenor_years, excluded.tenor_years),
+               notes           = COALESCE(bonds.notes, excluded.notes),
                first_seen_date = MIN(COALESCE(bonds.first_seen_date, excluded.first_seen_date),
                                      COALESCE(excluded.first_seen_date, bonds.first_seen_date))""",
-        (isin, coupon_pct, maturity_date, tenor_years, first_seen_date),
+        (isin, coupon_pct, maturity_date, tenor_years, first_seen_date, notes),
     )
 
 
