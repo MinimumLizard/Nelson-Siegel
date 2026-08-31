@@ -154,8 +154,19 @@ security type (Tbill/TBond), opening/closing/highest/lowest/weighted-average
 yield (already in %), volume (Rs. mn), number of trades; plus a small
 indicators table (total turnover, trade/participant counts) for the report
 date and the previous session. pdfplumber's `extract_tables` handles it
-well; number cells contain stray spaces from digit grouping (`2 ,800`) —
-strip `[ ,]` before parsing. Index link text usually carries the date
+well, but **three cell-boundary layouts** appear across the archive and the
+parser handles all three by reading rows by content rather than position:
+
+1. clean (Aug 2026): one cell per column;
+2. fused (Dec 2025): the row number and ISIN share one cell
+   (`"1LKA36426K135"`) and the ISIN column is empty;
+3. collapsed (Feb 2026): the *entire* table extracts as a single row whose
+   cells are whole newline-joined columns — re-exploded by splitting on
+   newlines and zipping back into per-security rows.
+
+Number cells contain stray spaces from digit grouping (`2 ,800`) — strip
+`[ ,]` before parsing. Every parse reconciles against the PDF's own
+"Total Turnover" indicator, which is how all three layouts were verified. Index link text usually carries the date
 ("… - 28 August 2026" or "… 26.05.2026"); ~20 entries are labelled just
 "Download" with the date in an ancestor element's text.
 
@@ -166,3 +177,28 @@ strip `[ ,]` before parsing. Index link text usually carries the date
   auction results.
 * `result-treasury-bonds/section/2026` lists auction press releases in
   three languages (duplicated links) — left to the later auction stage.
+
+## Known coverage limitation: quotes without a discoverable ISIN
+
+The quote sheet identifies bonds only by coupon + maturity, and its tenor
+column cannot be used to synthesise an ISIN (above). The pipeline therefore
+learns real ISINs from the volumes and trade-summary files and joins quotes
+to them by maturity date (coupon as tie-break). A bond that never traded
+anywhere in the archive window has no discoverable ISIN, so its quotes are
+counted and reported but not stored.
+
+Measured on the Dec 2025 - Aug 2026 backfill: 49 distinct bonds discovered,
+~45 of the ~92 daily quote rows stored per day. The remainder are ~19
+step-coupon restructuring bonds plus ~24 never-traded ordinary bonds
+(typically long-dated, maturing on the 1st of a month).
+
+This is deliberate: inventing an ISIN would silently corrupt every join
+downstream, and a wrong identifier is far worse than a missing row. Each
+file's `parse_note` records the split, e.g. "49 quotes (43 without a known
+ISIN)", so the gap is visible in the database rather than hidden.
+
+To close it, supply a coupon+maturity -> ISIN reference table (the later
+auction-results stage publishes ISINs directly, which will fill most of it
+automatically), and re-run `python -m pipeline.backfill`: the cached files
+re-parse offline and the newly resolvable quotes land without a single
+download.

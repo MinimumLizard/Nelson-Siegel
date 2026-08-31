@@ -15,8 +15,22 @@ Three report families are ingested (details and quirks in
 | Outright Transactions Volumes | legacy Excel `.xls` | per-ISIN outright traded volume, Rs. mn |
 | Secondary Market Trade Summary | PDF | per-ISIN executed trades: OHLC + wavg yield, volume, trade count |
 
-The archive reaches back to **28 Nov 2025** (the site publishes nothing
-older under these sections).
+The archive reaches back to **1 Dec 2025** (the site publishes nothing older
+under these sections). A full backfill on 2026-08-31 ingested **542 files**
+with zero parse failures: 49 bonds, 8,069 daily observations and 2,727
+executed-trade rows spanning 2025-12-01 to 2026-08-31.
+
+### One known gap
+
+The quote sheet identifies bonds by coupon + maturity only, and its tenor
+column disagrees with the tenor encoded in real ISINs — so ISINs cannot be
+synthesised from it. Real ISINs are learned from the volumes and
+trade-summary files, and quotes are joined to them by maturity date. About
+45 of the ~92 daily quote rows resolve this way; the rest are step-coupon
+restructuring bonds and never-traded long-dated bonds, whose quotes are
+counted in each file's `parse_note` but not stored. Inventing an ISIN would
+corrupt every downstream join, so the pipeline refuses to guess. See
+`docs/DATA_NOTES.md` for how to close the gap without re-downloading.
 
 ## Setup
 
