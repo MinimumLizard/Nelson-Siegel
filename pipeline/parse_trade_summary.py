@@ -91,18 +91,25 @@ def _collect_rows(table, result: TradeSummary, path) -> None:
 
     # Column order is fixed in every sample:
     # No | ISIN | Tenure | Type | Open | Close | High | Low | WAvg | Volume | Trades
-    header = [dates.collapse_ws(cell or "").lower() for cell in table[header_index]]
-    isin_column = next(i for i, cell in enumerate(header) if cell == "isin")
-
+    # ...but cell BOUNDARIES drift: older PDFs fuse the row number and ISIN
+    # into one cell ("1LKA36426K135") and leave the ISIN column empty. So
+    # rows are read by content, not position: the ISIN is found by pattern
+    # anywhere in the row, and the numbers are anchored on the Tbill/TBond
+    # type cell, which reliably sits between the tenure and the yields.
     for row in table[header_index + 1:]:
         cells = [dates.collapse_ws(cell or "") for cell in row]
-        if len(cells) <= isin_column:
-            continue
-        raw_isin = re.sub(r"\s", "", cells[isin_column])
-        if not re.fullmatch(r"LK[A-Z]\w{8}\d", raw_isin):
+        joined = re.sub(r"\s", "", "".join(cells))
+        isin_match = re.search(r"LK[A-Z]\d{5}[A-L]\d{3}", joined)
+        if not isin_match:
             continue  # totals row, blank padding, etc.
-        numbers = [_clean_number(cell) for cell in cells[isin_column + 2:]]
+        raw_isin = isin_match.group(0)
+        type_index = next((index for index, cell in enumerate(cells)
+                           if cell.lower() in ("tbill", "tbond")), None)
+        if type_index is None:
+            log.warning("%s: no security type for %s — dropped", path, raw_isin)
+            continue
         # [open, close, high, low, wavg, volume_mn, n_trades] after the type
+        numbers = [_clean_number(cell) for cell in cells[type_index + 1:]]
         numbers = [n for n in numbers if n is not None]
         if len(numbers) < 7:
             log.warning("%s: short trade row for %s — dropped", path, raw_isin)
@@ -110,7 +117,7 @@ def _collect_rows(table, result: TradeSummary, path) -> None:
         open_y, close_y, high_y, low_y, wavg, volume_mn, n_trades = numbers[:7]
         result.rows.append({
             "isin": raw_isin,
-            "security_type": cells[isin_column + 2],
+            "security_type": cells[type_index],
             "open_yield": open_y,
             "close_yield": close_y,
             "high_yield": high_y,
