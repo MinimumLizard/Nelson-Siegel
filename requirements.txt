@@ -1,8 +1,9 @@
 # Stage 0 (data layer) dependencies, pinned to the versions the pipeline was
 # built and tested against. Install with:  pip install -r requirements.txt
-requests==2.34.2         # HTTP client for index pages + PDF downloads
+requests==2.34.2         # HTTP client for index pages + report downloads
 beautifulsoup4==4.15.0   # HTML parsing of the messy PDMO index pages
-pdfplumber==0.11.10      # table extraction from the daily-report PDFs
+pdfplumber==0.11.10      # table extraction from the trade-summary PDFs
+xlrd==2.0.2              # the "PDF" links actually serve legacy Excel .xls files
 pandas==3.0.5            # tabular wrangling + the report command
 matplotlib==3.11.1       # yield/volume plots for the report command
 pytest==9.1.1            # sanity tests
