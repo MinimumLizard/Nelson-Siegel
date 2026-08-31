@@ -19,6 +19,8 @@ from pipeline.parse_daily import ParseError
 
 log = logging.getLogger(__name__)
 
+ISIN_RE = re.compile(r"LK[A-Z]\d{5}[A-L]\d{3}")
+
 
 @dataclass
 class TradeSummary:
@@ -78,6 +80,26 @@ def parse(path, label_date: date | None = None) -> TradeSummary:
     return result
 
 
+def _explode_rows(rows):
+    """Undo pdfplumber's occasional column-wise collapse of the table.
+
+    In some PDFs every "cell" of a single extracted row holds an entire
+    column joined with newlines ("LKA...\\nLKA...\\n..."). When a row
+    carries two or more ISINs it is such a collapsed table: split each
+    cell on newlines and zip the pieces back into per-security rows.
+    """
+    for row in rows:
+        cells = ["" if cell is None else str(cell) for cell in row]
+        if len(ISIN_RE.findall(" ".join(cells))) >= 2:
+            columns = [cell.split("\n") for cell in cells]
+            height = max(len(lines) for lines in columns)
+            for line_number in range(height):
+                yield [lines[line_number] if line_number < len(lines) else ""
+                       for lines in columns]
+        else:
+            yield row
+
+
 def _collect_rows(table, result: TradeSummary, path) -> None:
     """Append the rows of a table if (and only if) it is the ISIN table."""
     header_index = None
@@ -92,11 +114,13 @@ def _collect_rows(table, result: TradeSummary, path) -> None:
     # Column order is fixed in every sample:
     # No | ISIN | Tenure | Type | Open | Close | High | Low | WAvg | Volume | Trades
     # ...but cell BOUNDARIES drift: older PDFs fuse the row number and ISIN
-    # into one cell ("1LKA36426K135") and leave the ISIN column empty. So
-    # rows are read by content, not position: the ISIN is found by pattern
-    # anywhere in the row, and the numbers are anchored on the Tbill/TBond
-    # type cell, which reliably sits between the tenure and the yields.
-    for row in table[header_index + 1:]:
+    # into one cell ("1LKA36426K135") and leave the ISIN column empty, and
+    # some extractions collapse the WHOLE table into a single row whose
+    # cells are newline-joined columns. So rows are first re-exploded where
+    # needed, then read by content, not position: the ISIN is found by
+    # pattern anywhere in the row, and the numbers are anchored on the
+    # Tbill/TBond type cell, which reliably sits between tenure and yields.
+    for row in _explode_rows(table[header_index + 1:]):
         cells = [dates.collapse_ws(cell or "") for cell in row]
         joined = re.sub(r"\s", "", "".join(cells))
         isin_match = re.search(r"LK[A-Z]\d{5}[A-L]\d{3}", joined)
