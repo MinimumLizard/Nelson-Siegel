@@ -56,3 +56,41 @@ def test_record_file_partial_updates(tmp_path):
 def test_lkr_from_millions_is_exact():
     assert db.lkr_from_millions(232.825) == 232_825_000
     assert db.lkr_from_millions(6241.28) == 6_241_280_000
+
+
+def test_clear_quotes_removes_stale_rows_but_keeps_volume(tmp_path):
+    """A fixed parser must not leave rows an older buggy parse wrote."""
+    conn = db.connect(tmp_path / "test.sqlite")
+    # An old parse wrote quotes for two bonds; one also has traded volume.
+    db.upsert_quote(conn, "2026-05-13", "LKB00934F154", 11.5, 11.3, 101.2, 101.5, "fileA")
+    db.upsert_quote(conn, "2026-05-13", "LKB01035F159", 11.18, 11.0, 99.0, 99.5, "fileA")
+    db.upsert_volume(conn, "2026-05-13", "LKB00934F154", 100_000_000)
+
+    db.clear_quotes(conn, "fileA")
+    rows = conn.execute("SELECT * FROM observations").fetchall()
+    # The quote-only row is gone entirely; the row with volume survives with
+    # its volume intact and its quote columns emptied.
+    assert len(rows) == 1
+    assert rows[0]["isin"] == "LKB00934F154"
+    assert rows[0]["volume_lkr"] == 100_000_000
+    assert rows[0]["bid_yield"] is None
+
+
+def test_clear_volumes_keeps_quotes(tmp_path):
+    conn = db.connect(tmp_path / "test.sqlite")
+    db.upsert_quote(conn, "2026-05-13", "LKB00934F154", 11.5, 11.3, 101.2, 101.5, "fileA")
+    db.upsert_volume(conn, "2026-05-13", "LKB00934F154", 100_000_000)
+    db.clear_volumes(conn, "2026-05-13")
+    row = conn.execute("SELECT * FROM observations").fetchone()
+    assert row["volume_lkr"] is None
+    assert row["bid_yield"] == 11.5
+
+
+def test_clear_trade_summary_scoped_to_one_file(tmp_path):
+    conn = db.connect(tmp_path / "test.sqlite")
+    for isin, ref in (("LKB00934F154", "fileA"), ("LKB01035F159", "fileB")):
+        db.upsert_trade_summary(conn, "2026-05-13", isin, "TBond", 11.0, 11.1,
+                                10.9, 11.0, 11.0, 100_000_000, 1, ref)
+    db.clear_trade_summary(conn, "fileA")
+    remaining = conn.execute("SELECT isin FROM trade_summary").fetchall()
+    assert [r["isin"] for r in remaining] == ["LKB01035F159"]

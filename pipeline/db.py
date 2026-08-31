@@ -198,6 +198,45 @@ def upsert_trade_summary(conn, obs_date, isin, security_type, open_yield, high_y
     )
 
 
+def _drop_empty_observations(conn):
+    """Delete observation rows left with no data at all after a clear."""
+    conn.execute("""DELETE FROM observations
+                    WHERE bid_yield IS NULL AND offer_yield IS NULL
+                      AND bid_price IS NULL AND offer_price IS NULL
+                      AND volume_lkr IS NULL""")
+
+
+def clear_quotes(conn, raw_ref):
+    """Forget the quotes a previous parse of this file wrote.
+
+    Called before re-ingesting a daily summary so the database always
+    reflects what the CURRENT parser produces: if a fixed parser no longer
+    emits a row, the stale row must not survive. The volume half of the
+    row is left untouched (it came from a different file).
+    """
+    conn.execute("""UPDATE observations
+                       SET bid_yield = NULL, offer_yield = NULL, mid_yield = NULL,
+                           bid_price = NULL, offer_price = NULL, raw_ref = NULL
+                     WHERE raw_ref = ?""", (raw_ref,))
+    _drop_empty_observations(conn)
+
+
+def clear_volumes(conn, obs_date):
+    """Forget the traded volumes previously recorded for one date.
+
+    Volume rows carry no raw_ref (the column belongs to the quote half),
+    so they are cleared by date — exactly the scope one volumes file owns.
+    """
+    conn.execute("""UPDATE observations SET volume_lkr = NULL
+                     WHERE obs_date = ? AND source = 'pdmo_daily'""", (obs_date,))
+    _drop_empty_observations(conn)
+
+
+def clear_trade_summary(conn, raw_ref):
+    """Forget the executed trades a previous parse of this file wrote."""
+    conn.execute("DELETE FROM trade_summary WHERE raw_ref = ?", (raw_ref,))
+
+
 def record_file(conn, url, **fields):
     """Insert or update one row in `files`. Only the passed fields change.
 

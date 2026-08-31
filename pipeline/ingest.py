@@ -97,6 +97,10 @@ def _ingest_volumes(conn, item: WorkItem, path, raw_ref):
         log.warning("%s: derived date %s != index label %s — trusting the data",
                     path.name, obs_date, item.entry.label_date)
     iso = obs_date.isoformat()
+    # Drop whatever a previous parse of this date's volumes recorded, so the
+    # database always mirrors the CURRENT parser rather than accumulating
+    # rows a since-fixed parser once emitted.
+    db.clear_volumes(conn, iso)
     for row in parsed.rows:
         tenor, maturity = isin.decode(row["isin"])  # parse_volumes verified it
         db.upsert_bond(conn, row["isin"], None, maturity.isoformat(), tenor, iso)
@@ -107,6 +111,7 @@ def _ingest_volumes(conn, item: WorkItem, path, raw_ref):
 def _ingest_daily_summary(conn, item: WorkItem, path, raw_ref):
     parsed = parse_daily.parse_daily_summary(path)
     iso = parsed.reporting_date.isoformat()
+    db.clear_quotes(conn, raw_ref)  # see the note in _ingest_volumes
     lookup = _bond_lookup(conn)
     matched = unmatched = 0
     for quote in parsed.quotes:
@@ -130,6 +135,7 @@ def _ingest_daily_summary(conn, item: WorkItem, path, raw_ref):
 def _ingest_trade_summary(conn, item: WorkItem, path, raw_ref):
     parsed = parse_trade_summary.parse(path, label_date=item.entry.label_date)
     iso = parsed.obs_date.isoformat()
+    db.clear_trade_summary(conn, raw_ref)  # see the note in _ingest_volumes
     for row in parsed.rows:
         decoded = isin.decode(row["isin"])
         if decoded:  # bonds enrich the bonds table; bills (LKA...) don't
