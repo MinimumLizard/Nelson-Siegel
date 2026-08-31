@@ -202,3 +202,17 @@ auction-results stage publishes ISINs directly, which will fill most of it
 automatically), and re-run `python -m pipeline.backfill`: the cached files
 re-parse offline and the newly resolvable quotes land without a single
 download.
+
+## Repeatability rule for future parser fixes
+
+Ingestion clears a file's previous output before writing the new rows
+(`db.clear_quotes` / `clear_volumes` / `clear_trade_summary`). Without this,
+re-parsing was additive: a row emitted by an older, buggier parser survived
+forever because nothing produced it again to overwrite. One such row was
+found in practice (an empty `security_type` left by the pre-fix trade
+summary parser).
+
+The practical consequence: after fixing a parser, just re-run
+`python -m pipeline.backfill`. It re-parses everything from the cache with
+no downloads, and the database ends up exactly as if that file had never
+been parsed the old way.
