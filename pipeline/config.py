@@ -27,6 +27,16 @@ PDMO_INDEX_URLS = {
     2026: f"{PDMO_BASE}/web/report-daily-report/section/2026",
 }
 
+# Further PDMO index pages (supplied by the user, each listing sub-pages with
+# multiple PDFs). Candidates to inspect alongside the daily reports; the
+# auction/bond-result pages are for the LATER auction stage, stubs only now.
+PDMO_EXTRA_INDEX_URLS = {
+    "trade_summary_2026": f"{PDMO_BASE}/web/reports-secondary-market-trade-summary/section/2026",
+    "market_reports": f"{PDMO_BASE}/web/government-securities/section/market%20reports",
+    "auction_results": f"{PDMO_BASE}/web/government-securities/section/auction%20result",
+    "bond_auction_2026": f"{PDMO_BASE}/web/result-treasury-bonds/section/2026",
+}
+
 # ---------------------------------------------------------------------------
 # Politeness. This is a small government site: downloads are sequential, we
 # pause between requests, retry with exponential backoff, and identify
