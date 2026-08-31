@@ -1,0 +1,27 @@
+# Virtual environment — everyone recreates this locally from requirements.txt
+.venv/
+
+# Raw and derived data live outside version control.
+# The pipeline must always be able to rebuild the database from cached PDFs,
+# but the PDFs themselves are too big (and too numerous) to commit.
+# Exception: a couple of small fixture PDFs under tests/fixtures/ ARE committed
+# so the parser tests can run offline.
+data/
+
+# SQLite databases (the main one and any scratch copies)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# pytest cache
+.pytest_cache/
+
+# Editor noise
+.vscode/
+.idea/
+*.swp
