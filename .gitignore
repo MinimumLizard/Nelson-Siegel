@@ -1,15 +1,18 @@
 # Virtual environment — everyone recreates this locally from requirements.txt
 .venv/
 
-# Raw and derived data live outside version control.
-# The pipeline must always be able to rebuild the database from cached PDFs,
-# but the PDFs themselves are too big (and too numerous) to commit.
-# Exception: a couple of small fixture PDFs under tests/fixtures/ ARE committed
-# so the parser tests can run offline.
-data/
+# Raw downloads and one-off inspection output: big, numerous, and always
+# rebuildable from the index pages, so they are never committed.
+# (A couple of small fixture files under tests/fixtures/ ARE committed so the
+# parser tests can run offline.)
+data/raw/
+data/samples/
+data/index_html/
 
-# SQLite databases (the main one and any scratch copies)
-*.sqlite
+# NOT ignored, deliberately: data/sgcp.sqlite and data/reports/*.png.
+# The scheduled GitHub Action commits a freshly updated database and charts
+# every day, so cloning this repo gives you current data without running
+# anything. SQLite's transient side-files still stay out:
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
