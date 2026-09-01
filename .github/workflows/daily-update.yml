@@ -1,9 +1,11 @@
 # Keeps the committed database current without anyone running anything.
 #
 # Every day this fetches whatever the PDMO has published since the last run,
-# parses it into data/sgcp.sqlite, fits that day's yield curve, refreshes the
-# charts, and commits the result back to this repository. A day with nothing
-# new (weekend, public holiday) simply makes no commit.
+# parses it into data/sgcp.sqlite, fits that day's yield curve, recomputes the
+# relative-value signals, refreshes the charts, and commits the result back to
+# this repository. A day with nothing new (weekend, public holiday) simply
+# makes no commit. Today's signals are printed into the run log, so the
+# Actions page doubles as a daily readout.
 #
 # You can also start a run by hand: Actions tab -> "Daily PDMO update" ->
 # "Run workflow".
@@ -55,6 +57,14 @@ jobs:
 
       - name: Refresh the latest curve chart
         run: python -m curves.fit --plot-latest
+
+      - name: Recompute the relative-value signals
+        # Rebuilt wholesale from the residuals (cheap), so a change to the
+        # window or pair rule can never leave half the history on old rules.
+        run: python -m signals.run
+
+      - name: Print today's signals into the run log
+        run: python -m signals.report
 
       - name: Commit the refreshed data
         run: |
