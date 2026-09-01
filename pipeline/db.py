@@ -18,10 +18,13 @@ Design decisions (agreed during sample inspection):
   beat one wide table where half the columns are NULL for half the rows.
 """
 
+import logging
 import sqlite3
 from pathlib import Path
 
 from pipeline import config
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 -- One row per bond we have ever seen. ISINs are synthesised/verified from
@@ -32,8 +35,23 @@ CREATE TABLE IF NOT EXISTS bonds (
     coupon_pct      REAL,      -- e.g. 11.25 (percent per annum)
     maturity_date   TEXT,      -- ISO date
     tenor_years     INTEGER,   -- original tenor encoded in the ISIN
+    series_label    TEXT,      -- canonical "10.00%2030A"; joins quotes to ISINs
     first_seen_date TEXT,      -- first obs_date this bond appeared on
     notes           TEXT
+);
+
+-- Primary auction / issuance-window results, one row per bond per auction.
+CREATE TABLE IF NOT EXISTS auctions (
+    auction_date    TEXT NOT NULL,
+    isin            TEXT NOT NULL,
+    kind            TEXT,      -- 'auction' (competitive) | 'issuance' (window)
+    settlement_date TEXT,
+    way_pct         REAL,      -- weighted average yield accepted, percent
+    offered_lkr     INTEGER,
+    bids_lkr        INTEGER,   -- bids_lkr / offered_lkr = bid-to-cover
+    accepted_lkr    INTEGER,
+    raw_ref         TEXT,
+    PRIMARY KEY (auction_date, isin, kind)
 );
 
 -- One row per (day, bond, source). For source='pdmo_daily' the yield/price
@@ -85,6 +103,44 @@ CREATE TABLE IF NOT EXISTS fills (
     deal_ref     TEXT
 );
 
+-- Settings the curve stage calibrates once and then reuses (lambda_years).
+CREATE TABLE IF NOT EXISTS curve_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- One fitted Nelson-Siegel curve per day (written by the curves/ package).
+-- The trade_* columns are the daily honesty check: how the curve, fitted on
+-- dealer quotes, compares with the bonds that actually traded that day.
+CREATE TABLE IF NOT EXISTS curve_fits (
+    obs_date      TEXT PRIMARY KEY,
+    beta0         REAL,     -- long-run level, percent
+    beta1         REAL,     -- slope: beta0+beta1 is the very short end
+    beta2         REAL,     -- curvature (the hump)
+    lambda_years  REAL,     -- where the hump sits
+    n_quotes      INTEGER,  -- bonds the curve was fitted on
+    rmse_bp       REAL,     -- weighted fit error, basis points
+    n_trades      INTEGER,  -- traded bonds available to check against
+    trade_rmse_bp REAL,
+    trade_bias_bp REAL,     -- mean(traded - fitted); the quote/trade gap
+    fitted_at     TEXT
+);
+
+-- Per-bond distance from the fitted curve. This is what the signals stage
+-- consumes. SIGN CONVENTION: residual_bp = observed - fitted, so POSITIVE
+-- means the bond yields more than the curve says it should — i.e. CHEAP.
+CREATE TABLE IF NOT EXISTS curve_residuals (
+    obs_date       TEXT NOT NULL,
+    isin           TEXT NOT NULL,
+    source         TEXT NOT NULL,  -- 'quote' (in the fit) | 'trade' (check)
+    tau_years      REAL,
+    observed_yield REAL,
+    fitted_yield   REAL,
+    residual_bp    REAL,
+    weight         REAL,           -- relative weight this point carried
+    PRIMARY KEY (obs_date, isin, source)
+);
+
 -- Bookkeeping for every remote file: what we downloaded, its hash, which
 -- report date it turned out to cover, and whether parsing succeeded.
 -- parse_status: 'pending' | 'ok' | 'failed'
@@ -100,6 +156,15 @@ CREATE TABLE IF NOT EXISTS files (
 );
 """
 
+# Indexes are created after the column migration below, since one of them
+# is on a column that older databases gain only at migration time.
+INDEXES = """
+CREATE INDEX IF NOT EXISTS bonds_series ON bonds(series_label);
+CREATE INDEX IF NOT EXISTS observations_isin ON observations(isin, source);
+CREATE INDEX IF NOT EXISTS trade_summary_date ON trade_summary(obs_date);
+CREATE INDEX IF NOT EXISTS curve_residuals_isin ON curve_residuals(isin, source);
+"""
+
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     """Open (creating if needed) the pipeline database and ensure the schema.
@@ -113,11 +178,32 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row  # rows behave like named lists, not tuples
     conn.executescript(SCHEMA)
+    _migrate(conn)
+    conn.executescript(INDEXES)
     return conn
 
 
+# Columns added after the first databases were built. CREATE TABLE IF NOT
+# EXISTS leaves an existing table untouched, so new columns are added here
+# instead; the pipeline is expected to run against a database that has been
+# accumulating data since before they existed.
+ADDED_COLUMNS = {
+    "bonds": {"series_label": "TEXT"},
+}
+
+
+def _migrate(conn) -> None:
+    for table, columns in ADDED_COLUMNS.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, column_type in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+                log.info("migrated: added %s.%s", table, column)
+    conn.commit()
+
+
 def upsert_bond(conn, isin, coupon_pct, maturity_date, tenor_years, first_seen_date,
-                notes=None):
+                notes=None, series_label=None):
     """Insert a bond, or fill in blanks on an existing row.
 
     COALESCE(old, new) keeps an already-known coupon if a later file
@@ -127,16 +213,17 @@ def upsert_bond(conn, isin, coupon_pct, maturity_date, tenor_years, first_seen_d
     """
     conn.execute(
         """INSERT INTO bonds (isin, coupon_pct, maturity_date, tenor_years,
-                              first_seen_date, notes)
-           VALUES (?, ?, ?, ?, ?, ?)
+                              first_seen_date, notes, series_label)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(isin) DO UPDATE SET
                coupon_pct      = COALESCE(bonds.coupon_pct, excluded.coupon_pct),
                maturity_date   = COALESCE(bonds.maturity_date, excluded.maturity_date),
                tenor_years     = COALESCE(bonds.tenor_years, excluded.tenor_years),
                notes           = COALESCE(bonds.notes, excluded.notes),
+               series_label    = COALESCE(bonds.series_label, excluded.series_label),
                first_seen_date = MIN(COALESCE(bonds.first_seen_date, excluded.first_seen_date),
                                      COALESCE(excluded.first_seen_date, bonds.first_seen_date))""",
-        (isin, coupon_pct, maturity_date, tenor_years, first_seen_date, notes),
+        (isin, coupon_pct, maturity_date, tenor_years, first_seen_date, notes, series_label),
     )
 
 
@@ -235,6 +322,48 @@ def clear_volumes(conn, obs_date):
 def clear_trade_summary(conn, raw_ref):
     """Forget the executed trades a previous parse of this file wrote."""
     conn.execute("DELETE FROM trade_summary WHERE raw_ref = ?", (raw_ref,))
+
+
+def upsert_auction(conn, auction_date, isin, kind, settlement_date, way_pct,
+                   offered_lkr, bids_lkr, accepted_lkr, raw_ref):
+    """One bond's result from one auction (replace on re-parse)."""
+    conn.execute(
+        """INSERT INTO auctions (auction_date, isin, kind, settlement_date, way_pct,
+                                 offered_lkr, bids_lkr, accepted_lkr, raw_ref)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(auction_date, isin, kind) DO UPDATE SET
+               settlement_date = excluded.settlement_date,
+               way_pct         = excluded.way_pct,
+               offered_lkr     = excluded.offered_lkr,
+               bids_lkr        = excluded.bids_lkr,
+               accepted_lkr    = excluded.accepted_lkr,
+               raw_ref         = excluded.raw_ref""",
+        (auction_date, isin, kind, settlement_date, way_pct,
+         offered_lkr, bids_lkr, accepted_lkr, raw_ref))
+
+
+def upsert_auction_observation(conn, obs_date, isin, way_pct, volume_lkr, raw_ref):
+    """The auction's weighted-average yield as an observation.
+
+    executable=1: unlike the dealers' indicative daily quotes, an auction
+    yield is a level at which money actually changed hands.
+    """
+    conn.execute(
+        """INSERT INTO observations (obs_date, isin, source, mid_yield,
+                                     volume_lkr, executable, raw_ref)
+           VALUES (?, ?, 'auction', ?, ?, 1, ?)
+           ON CONFLICT(obs_date, isin, source) DO UPDATE SET
+               mid_yield  = excluded.mid_yield,
+               volume_lkr = excluded.volume_lkr,
+               executable = 1,
+               raw_ref    = excluded.raw_ref""",
+        (obs_date, isin, way_pct, volume_lkr, raw_ref))
+
+
+def clear_auction(conn, raw_ref):
+    """Forget what a previous parse of this release wrote."""
+    conn.execute("DELETE FROM auctions WHERE raw_ref = ?", (raw_ref,))
+    conn.execute("DELETE FROM observations WHERE source='auction' AND raw_ref = ?", (raw_ref,))
 
 
 def record_file(conn, url, **fields):

@@ -1,10 +1,13 @@
-# SGCP RV Pipeline — Stage 0: Data Layer
+# SGCP RV Pipeline
 
 Ingests Sri Lanka PDMO secondary-market data — Treasury bond two-way quotes,
-per-ISIN traded volumes, and per-ISIN executed trades — into a SQLite
-database. Future stages — a `curves/` module (daily Nelson-Siegel fit) and a
-`signals/` module (rich/cheap residuals, switch signals) — will read from
-that database and never touch the raw files directly.
+per-ISIN traded volumes, per-ISIN executed trades and primary auction
+results — into a SQLite database (`pipeline/`), then fits a yield curve to
+every day and measures how far each bond sits from it (`curves/`). A future
+`signals/` module will read those residuals and never touch raw files.
+
+**Stage 0 (data layer) and Stage 1 (curves) are complete.** Both run
+themselves daily; see "The data updates itself" below.
 
 Three report families are ingested (details and quirks in
 `docs/DATA_NOTES.md`):
@@ -14,6 +17,7 @@ Three report families are ingested (details and quirks in
 | Daily Summary Report | legacy Excel `.xls` (despite the URL) | per-bond PD two-way quotes: avg bid/offer price + yield |
 | Outright Transactions Volumes | legacy Excel `.xls` | per-ISIN outright traded volume, Rs. mn |
 | Secondary Market Trade Summary | PDF | per-ISIN executed trades: OHLC + wavg yield, volume, trade count |
+| Treasury Bond Auction press releases | PDF | auction ISIN, series label, weighted average yield, amounts offered/bid/accepted |
 
 The archive reaches back to **1 Dec 2025** (the site publishes nothing older
 under these sections). A full backfill on 2026-08-31 ingested **542 files**
@@ -22,15 +26,20 @@ executed-trade rows spanning 2025-12-01 to 2026-08-31.
 
 ### One known gap
 
-The quote sheet identifies bonds by coupon + maturity only, and its tenor
-column disagrees with the tenor encoded in real ISINs — so ISINs cannot be
-synthesised from it. Real ISINs are learned from the volumes and
-trade-summary files, and quotes are joined to them by maturity date. About
-45 of the ~92 daily quote rows resolve this way; the rest are step-coupon
-restructuring bonds and never-traded long-dated bonds, whose quotes are
-counted in each file's `parse_note` but not stored. Inventing an ISIN would
-corrupt every downstream join, so the pipeline refuses to guess. See
-`docs/DATA_NOTES.md` for how to close the gap without re-downloading.
+The quote sheet identifies bonds only by a series label ("10.00%2030A"),
+never by ISIN. Auction press releases print that label beside its ISIN, so
+quotes are resolved by label where an auction covers the bond and by
+maturity date otherwise — about 45 of the ~92 daily quote rows resolve.
+
+The rest cannot be identified from any published source. Their ISINs cannot
+be synthesised either: the quote sheet's tenor column agrees with the tenor
+encoded in real ISINs only 33 times out of 44, so a quarter of synthesised
+ISINs would be wrong, and a wrong ISIN silently attributes one bond's
+history to another. The pipeline refuses to guess; each file's `parse_note`
+records the split so the gap is visible rather than hidden.
+
+45 bonds spanning roughly 1 to 13 years is ample for curve fitting, so this
+limits breadth, not curve quality.
 
 ## The data updates itself
 
@@ -65,6 +74,10 @@ python -m pipeline.backfill                    # download + parse the whole arch
 python -m pipeline.update                      # fetch only what's new (daily use)
 python -m pipeline.report --isin LKB00934F154  # one bond's yield/volume history + chart
 
+python -m curves.fit                           # fit any day that has no curve yet
+python -m curves.fit --date 2026-08-28 --plot  # one day, with a chart
+python -m curves.fit --calibrate               # re-choose lambda, then refit all
+
 pytest                                         # offline: runs against committed fixtures
 
 # diagnostics used to design the parsers; still handy when the site changes
@@ -82,8 +95,11 @@ treasury.gov.lk index pages ──> data/raw/YYYY/<uuid>.{xls,pdf}   (immutable 
                                       ▼  xlrd / pdfplumber parsing (repeatable)
                                 data/sgcp.sqlite
                                       │
+                                      ▼  curves/ (reads only the database)
+                     one Nelson-Siegel fit per day + residuals
+                                      │
                                       ▼
-                       future: curves/ and signals/ modules
+                            future: signals/ module
 ```
 
 * Every file is cached on disk before parsing; parsing is always repeatable
@@ -118,6 +134,19 @@ rupees**.
 * **fills** — own executions, loaded manually later: `fill_date`, `isin`,
   `side`, `yield`, `clean_price`, `dirty_price`, `face_lkr`, `counterparty`,
   `deal_ref`.
+* **auctions** — primary auction / issuance-window results: `auction_date`,
+  `isin`, `kind`, `settlement_date`, `way_pct`, `offered_lkr`, `bids_lkr`
+  (bids ÷ offered = bid-to-cover), `accepted_lkr`.
+* **curve_fits** — one fitted curve per day: `beta0` (long-run level),
+  `beta1` (slope; `beta0+beta1` is the short end), `beta2` (curvature),
+  `lambda_years`, `n_quotes`, `rmse_bp`, and the daily honesty check
+  against bonds that traded: `n_trades`, `trade_rmse_bp`, `trade_bias_bp`.
+* **curve_residuals** — how far each bond sat from the curve:
+  `obs_date`, `isin`, `source` ('quote' = in the fit, 'trade' = held out),
+  `tau_years`, `observed_yield`, `fitted_yield`, `residual_bp`, `weight`.
+  **Sign convention: positive means the bond yields more than the curve
+  says it should — i.e. cheap.** This table is what the signals stage will
+  consume.
 * **files** — download/parse provenance: `url` (PK), `sha256`, `file_type`,
   `report_date`, `posted_date`, `downloaded_at`, `parse_status`,
   `parse_note`.
@@ -133,6 +162,38 @@ files' free-text titles contain typos and mixed date orders. "Amended"
 reports are complete replacements: files are ingested oldest-posted first,
 so the amendment simply overwrites.
 
-## Out of scope for Stage 0
+## The curve
 
-Curve fitting, signals, auction parsing (stub module only), any UI.
+One Nelson-Siegel curve is fitted per day, on the dealers' quote **mids**,
+each weighted by **1/spread²** — the bid-offer spread is the dealers' own
+statement of how sure they are, and the median spread is about 16bp while
+the tail reaches several hundred. Step-coupon restructuring bonds are
+excluded: their quotes look administered, and a stepped cash flow is not
+comparable with a fixed-coupon bond on one yield axis.
+
+**Executed trades are deliberately held out of the fit.** Quotes cover
+44–46 bonds every business day spanning about 1 to 13 years; trades cover
+around 11 a day (as few as 2) and typically reach neither the short end
+nor past 10 years, so a trade-fitted curve would extrapolate at both ends
+and lurch as the traded set changed — which a residual signal would read
+as bonds turning rich and cheap overnight. Trades are instead compared
+against the finished curve, giving an out-of-sample error (median 20.5bp)
+and a measured quote-to-trade gap each day. That gap averages +22bp but
+has a standard deviation of 26bp and goes negative on 18 of 180 days, so
+it is genuinely daily information rather than a constant to subtract.
+
+**Lambda is calibrated once over the whole sample (2.82 years) and then
+held fixed**, rather than refitted daily. Refitting it daily fits 0.2bp
+better and costs far more than that: it pinned lambda at the top of the
+search range on 29% of days, where the slope and curvature factors go
+nearly collinear over the maturities actually observed, swinging the
+"long-run level" beta0 between 2.4% and 14.6% and moving it by up to
+6.9pp overnight. Held fixed, beta0 stays within 11.9–13.7% and moves at
+most 0.5pp a day, so the three parameters mean the same thing on every
+date — which is what a residual-based signal needs.
+
+Typical fit quality: **10.8bp** weighted RMSE across 40–42 bonds a day.
+
+## Out of scope
+
+Signals, any UI. `pipeline/indicators.py` remains a stub.

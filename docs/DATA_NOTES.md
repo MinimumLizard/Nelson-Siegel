@@ -216,3 +216,57 @@ The practical consequence: after fixing a parser, just re-run
 `python -m pipeline.backfill`. It re-parses everything from the cache with
 no downloads, and the database ends up exactly as if that file had never
 been parsed the old way.
+
+## Auction press releases (PDF)
+
+Two document shapes are published under identical index titles, so the
+parser decides from content, not link text:
+
+* **auction result** — a table laid out one COLUMN PER BOND (Series, Date
+  of Maturity, ISINs, Coupon, Amount Offered, Bids Received, Amount
+  Accepted, Weighted Average Yield Rate);
+* **issuance window** — a prose follow-up naming ISINs and their yields in
+  sentences.
+
+Every auction is published in English, Sinhala and Tamil; only the English
+release is parsed. Layout hazards, all real:
+
+* field names wrap across up to three table rows, and the values can sit on
+  a row of their own BETWEEN two halves of the label ("Coupon Rate" /
+  values / "(p.a.) (%)"), so a row's label is read from its neighbours —
+  but a row's OWN label wins first, or one field claims the next field's
+  values (this shifted every figure by one row until fixed);
+* the table grid drifts between rows: in January 2026 the series labels sit
+  in columns 4/7/11/14 while the ISINs sit in 4/8/11/14, so values are read
+  as "non-empty cells from the first bond column rightwards";
+* in prose releases a line break falls inside the searched phrase
+  ("Weighted Average\nYield Rates of"), so prose is matched against
+  whitespace-collapsed text, and the yields themselves contain full stops
+  so the text after the phrase is taken by length, not up to the next
+  period.
+
+Cross-check available: an auction result and its issuance follow-up state
+the same weighted average yields in completely different formats. The
+25 August 2026 pair agrees at 10.54% / 11.70%.
+
+## What the auctions did and did not fix
+
+They were added expecting to roughly double the bonds on the curve. **They
+did not.** All 30 English releases across 2025-2026 cover only 17 distinct
+ISINs, every one of which the volumes and trade-summary files had already
+revealed. Bonds per day is unchanged at 44-46.
+
+What they did give:
+
+* **all 49 bonds now carry a series label**, so quotes resolve by exact
+  label (43 a day) instead of by maturity-date inference — a materially
+  more robust join, and the reason the previous coupon tie-break is now
+  only a fallback;
+* auction weighted-average yields as observations with `executable=1`;
+* offered / bids / accepted amounts, i.e. bid-to-cover, for later signals.
+
+**Synthesising the missing ISINs was tested and rejected.** Comparing the
+quote sheet's tenor column against the tenor encoded in the ISIN, for the
+44 bonds where both are known: 33 agree, 8 are off by +1, 2 by -1, 1 by +2.
+A quarter of synthesised ISINs would therefore be wrong, and a wrong ISIN
+silently merges two bonds' histories — far worse than a missing row.

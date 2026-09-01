@@ -1,9 +1,9 @@
 # Keeps the committed database current without anyone running anything.
 #
 # Every day this fetches whatever the PDMO has published since the last run,
-# parses it into data/sgcp.sqlite, refreshes the watched bonds' charts, and
-# commits the result back to this repository. A day with nothing new (weekend,
-# public holiday) simply makes no commit.
+# parses it into data/sgcp.sqlite, fits that day's yield curve, refreshes the
+# charts, and commits the result back to this repository. A day with nothing
+# new (weekend, public holiday) simply makes no commit.
 #
 # You can also start a run by hand: Actions tab -> "Daily PDMO update" ->
 # "Run workflow".
@@ -42,11 +42,19 @@ jobs:
       - name: Fetch and parse anything new
         run: python -m pipeline.update
 
+      - name: Fit the curve for any newly loaded day
+        # Only days without a curve are fitted; lambda stays as calibrated,
+        # so today's residuals are measured on the same scale as history's.
+        run: python -m curves.fit
+
       - name: Refresh the watched bonds' charts
         run: |
           for isin in LKB00530H016 LKB00934F154 LKB00934J156 LKB01136H151; do
             python -m pipeline.report --isin "$isin" --tail 5
           done
+
+      - name: Refresh the latest curve chart
+        run: python -m curves.fit --plot-latest
 
       - name: Commit the refreshed data
         run: |

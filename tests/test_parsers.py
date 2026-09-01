@@ -40,7 +40,9 @@ def test_daily_one_ordinary_bond(daily):
     quote = next(q for q in daily.quotes
                  if q["maturity_date"] == date(2034, 10, 15))
     assert quote["coupon_pct"] == 11.70
-    assert quote["series_label"] is None
+    # Canonical label; ordinary bonds have no separate printed form to keep.
+    assert quote["series_label"] == "11.70%2034A"
+    assert quote["printed_label"] is None
     assert quote["bid_yield"] == pytest.approx(11.60, abs=0.001)
     assert quote["offer_yield"] == pytest.approx(11.43125, abs=0.001)
     assert quote["bid_price"] == pytest.approx(100.486, abs=0.001)
@@ -48,7 +50,11 @@ def test_daily_one_ordinary_bond(daily):
 
 def test_daily_step_coupon_bond(daily):
     # A 2023-restructuring bond: several coupon steps chained in the label.
-    quote = next(q for q in daily.quotes if q["series_label"] == "12.4%7.5%5%2029A")
+    # Every step is kept in the canonical form so two bonds differing only
+    # in a later step stay distinct; the printed label is preserved too.
+    quote = next(q for q in daily.quotes
+                 if q["series_label"] == "12.40%7.50%5.00%2029A")
+    assert quote["printed_label"] == "12.4%7.5%5%2029A"
     assert quote["coupon_pct"] == 12.4  # first step stands in as the coupon
     assert quote["maturity_date"] == date(2029, 3, 15)
 
@@ -119,3 +125,52 @@ def test_trades_digit_grouping_repaired(trades):
 def test_trades_types(trades):
     kinds = {r["security_type"] for r in trades.rows}
     assert kinds == {"Tbill", "TBond"}
+
+
+# ---------------------------------------------------------------------------
+# Auction press releases (PDF) — two published shapes, one parser
+# ---------------------------------------------------------------------------
+
+def test_auction_table_wrapped_layout():
+    """The January 2026 release is the awkward one: field names span three
+    table rows and the column grid drifts between rows."""
+    from pipeline import parse_auction
+    auction = parse_auction.parse(FIXTURES / "auction_2026-01-12_wrapped.pdf")
+    assert auction.kind == "auction"
+    assert auction.auction_date == date(2026, 1, 12)
+    assert auction.settlement_date == date(2026, 1, 16)
+    assert len(auction.bonds) == 4
+
+    first = auction.bonds[0]
+    assert first["isin"] == "LKB00530C017"
+    assert first["series_label"] == "9.50%2030A"   # printed "09.50%2030 'A'"
+    assert first["coupon_pct"] == 9.50
+    assert first["way_pct"] == 9.74
+    assert first["offered_lkr"] == 50_000_000_000
+    assert first["bids_lkr"] == 123_051_000_000
+
+    # This auction was only partly filled — offered 75,000mn, accepted 54,791mn.
+    partial = auction.bonds[2]
+    assert partial["offered_lkr"] == 75_000_000_000
+    assert partial["accepted_lkr"] == 54_791_000_000
+
+
+def test_auction_issuance_prose_layout():
+    """Issuance-window releases state ISINs and yields in sentences, with a
+    line break falling inside the phrase the parser searches for."""
+    from pipeline import parse_auction
+    auction = parse_auction.parse(FIXTURES / "auction_2026-07-30_issuance.pdf")
+    assert auction.kind == "issuance"
+    assert auction.auction_date == date(2026, 7, 30)
+    assert [b["isin"] for b in auction.bonds] == [
+        "LKB00531B017", "LKB00934J156", "LKB01136H151", "LKB01237G019"]
+    assert [b["way_pct"] for b in auction.bonds] == [11.90, 12.42, 12.91, 13.01]
+    # Prose releases never print the series label.
+    assert all(b["series_label"] is None for b in auction.bonds)
+
+
+def test_auction_rejects_unrelated_pdf():
+    from pipeline import parse_auction
+    from pipeline.parse_daily import ParseError
+    with pytest.raises(ParseError):
+        parse_auction.parse(FIXTURES / "trade_summary_2026-08-28.pdf")

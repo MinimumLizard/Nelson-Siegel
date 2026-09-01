@@ -34,9 +34,17 @@ TRADE_SUMMARY_INDEX_URLS = {
     2026: f"{PDMO_BASE}/web/reports-secondary-market-trade-summary/section/2026",
 }
 
-# Further PDMO index pages (supplied by the user). Inspection showed the
-# first two are hub pages with no files; the bond-auction page lists press
-# releases for the LATER auction stage, stubs only now.
+# Treasury bond auction press releases, one page per year. Each auction is
+# published in English, Sinhala and Tamil; only the English release is
+# parsed. These carry the series-label -> ISIN mapping that the daily quote
+# sheet lacks, plus the auction weighted-average yield.
+BOND_AUCTION_INDEX_URLS = {
+    2025: f"{PDMO_BASE}/web/result-treasury-bonds/section/2025",
+    2026: f"{PDMO_BASE}/web/result-treasury-bonds/section/2026",
+}
+
+# Further PDMO index pages (supplied by the user). Inspection showed both
+# are hub pages with no files of their own, listing the sections above.
 PDMO_EXTRA_INDEX_URLS = {
     "market_reports": f"{PDMO_BASE}/web/government-securities/section/market%20reports",
     "auction_results": f"{PDMO_BASE}/web/government-securities/section/auction%20result",
