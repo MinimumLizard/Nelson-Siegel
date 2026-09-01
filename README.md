@@ -32,6 +32,24 @@ counted in each file's `parse_note` but not stored. Inventing an ISIN would
 corrupt every downstream join, so the pipeline refuses to guess. See
 `docs/DATA_NOTES.md` for how to close the gap without re-downloading.
 
+## The data updates itself
+
+A scheduled GitHub Action (`.github/workflows/daily-update.yml`) runs every
+day at 20:00 UTC on GitHub's own servers: it fetches whatever the PDMO has
+published since the last run, parses it, refreshes the watched bonds' charts
+and commits the result back to this repository. Nothing needs to be running
+on your machine.
+
+That is why `data/sgcp.sqlite` and `data/reports/*.png` are committed here
+(unusual for a database, deliberate in this case): the Action's runners are
+wiped after every job, so the repository itself is where the accumulated
+data lives. Cloning gives you current data immediately — the setup below is
+only needed to run the pipeline yourself or to extend it.
+
+A day with nothing new (weekend, public holiday) simply makes no commit. To
+run it on demand, open the repository's **Actions** tab, pick **Daily PDMO
+update**, and press **Run workflow**.
+
 ## Setup
 
 ```bash

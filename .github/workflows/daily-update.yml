@@ -1,0 +1,60 @@
+# Keeps the committed database current without anyone running anything.
+#
+# Every day this fetches whatever the PDMO has published since the last run,
+# parses it into data/sgcp.sqlite, refreshes the watched bonds' charts, and
+# commits the result back to this repository. A day with nothing new (weekend,
+# public holiday) simply makes no commit.
+#
+# You can also start a run by hand: Actions tab -> "Daily PDMO update" ->
+# "Run workflow".
+
+name: Daily PDMO update
+
+on:
+  schedule:
+    # 20:00 UTC = 01:30 in Colombo the next morning, comfortably after the
+    # day's reports are posted. Cron here is always in UTC.
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+# The job commits back to the repo, so it needs write access to contents.
+permissions:
+  contents: write
+
+# Never let two runs (say a manual one and the scheduled one) push at once.
+concurrency:
+  group: daily-pdmo-update
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch and parse anything new
+        run: python -m pipeline.update
+
+      - name: Refresh the watched bonds' charts
+        run: |
+          for isin in LKB00530H016 LKB00934F154 LKB00934J156 LKB01136H151; do
+            python -m pipeline.report --isin "$isin" --tail 5
+          done
+
+      - name: Commit the refreshed data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sgcp.sqlite data/reports
+          # --quiet exits non-zero when there IS something staged, so this
+          # commits on change and stays silent on a no-news day.
+          git diff --cached --quiet && echo "nothing new today" && exit 0
+          git commit -m "Daily data update ($(date -u +%Y-%m-%d))"
+          git push
