@@ -141,6 +141,40 @@ CREATE TABLE IF NOT EXISTS curve_residuals (
     PRIMARY KEY (obs_date, isin, source)
 );
 
+-- Per-bond rich/cheap signals (written by the signals/ package).
+-- zscore is the bond against ITS OWN trailing window, excluding the day
+-- being scored. dislocation_bp = residual_bp - mean_bp is the same thing in
+-- money: a large z on a tiny sd is not an opportunity, so both are stored.
+CREATE TABLE IF NOT EXISTS bond_signals (
+    obs_date       TEXT NOT NULL,
+    isin           TEXT NOT NULL,
+    residual_bp    REAL,
+    mean_bp        REAL,
+    sd_bp          REAL,
+    dislocation_bp REAL,   -- residual - mean; + = cheap vs its own norm
+    zscore         REAL,
+    n_window       INTEGER,
+    PRIMARY KEY (obs_date, isin)
+);
+
+-- Switch candidates: the residual spread within a pair of nearby bonds,
+-- z-scored against its own trailing window. Positive z = A has become
+-- unusually cheap against B, so the trade is sell B, buy A.
+CREATE TABLE IF NOT EXISTS switch_signals (
+    obs_date       TEXT NOT NULL,
+    isin_a         TEXT NOT NULL,
+    isin_b         TEXT NOT NULL,
+    tau_a          REAL,
+    tau_b          REAL,
+    spread_bp      REAL,
+    mean_bp        REAL,
+    sd_bp          REAL,
+    dislocation_bp REAL,
+    zscore         REAL,
+    n_window       INTEGER,
+    PRIMARY KEY (obs_date, isin_a, isin_b)
+);
+
 -- Bookkeeping for every remote file: what we downloaded, its hash, which
 -- report date it turned out to cover, and whether parsing succeeded.
 -- parse_status: 'pending' | 'ok' | 'failed'
@@ -163,6 +197,8 @@ CREATE INDEX IF NOT EXISTS bonds_series ON bonds(series_label);
 CREATE INDEX IF NOT EXISTS observations_isin ON observations(isin, source);
 CREATE INDEX IF NOT EXISTS trade_summary_date ON trade_summary(obs_date);
 CREATE INDEX IF NOT EXISTS curve_residuals_isin ON curve_residuals(isin, source);
+CREATE INDEX IF NOT EXISTS bond_signals_date ON bond_signals(obs_date);
+CREATE INDEX IF NOT EXISTS switch_signals_date ON switch_signals(obs_date);
 """
 
 

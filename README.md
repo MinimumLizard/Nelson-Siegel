@@ -4,10 +4,11 @@ Ingests Sri Lanka PDMO secondary-market data — Treasury bond two-way quotes,
 per-ISIN traded volumes, per-ISIN executed trades and primary auction
 results — into a SQLite database (`pipeline/`), then fits a yield curve to
 every day and measures how far each bond sits from it (`curves/`). A future
-`signals/` module will read those residuals and never touch raw files.
+and ranks rich/cheap and switch candidates from those residuals
+(`signals/`).
 
-**Stage 0 (data layer) and Stage 1 (curves) are complete.** Both run
-themselves daily; see "The data updates itself" below.
+**All three stages are complete** — data layer, curves, signals — and the
+whole chain runs itself daily; see "The data updates itself" below.
 
 Three report families are ingested (details and quirks in
 `docs/DATA_NOTES.md`):
@@ -78,6 +79,10 @@ python -m curves.fit                           # fit any day that has no curve y
 python -m curves.fit --date 2026-08-28 --plot  # one day, with a chart
 python -m curves.fit --calibrate               # re-choose lambda, then refit all
 
+python -m signals.run                          # rebuild rich/cheap + switch signals
+python -m signals.report                       # today's ranked candidates vs costs
+python -m signals.validate                     # does the signal predict reversion?
+
 pytest                                         # offline: runs against committed fixtures
 
 # diagnostics used to design the parsers; still handy when the site changes
@@ -98,8 +103,8 @@ treasury.gov.lk index pages ──> data/raw/YYYY/<uuid>.{xls,pdf}   (immutable 
                                       ▼  curves/ (reads only the database)
                      one Nelson-Siegel fit per day + residuals
                                       │
-                                      ▼
-                            future: signals/ module
+                                      ▼  signals/ (reads only the database)
+                       rich/cheap z-scores + switch candidates
 ```
 
 * Every file is cached on disk before parsing; parsing is always repeatable
@@ -194,6 +199,49 @@ date — which is what a residual-based signal needs.
 
 Typical fit quality: **10.8bp** weighted RMSE across 40–42 bonds a day.
 
+## The signals
+
+A bond's raw distance from the curve is not a signal. Most of that
+variation is cross-sectional — some bonds simply sit persistently cheap and
+would flag every single day. Across bonds the residual spread is 41.6bp,
+while a typical bond's own residual moves with a standard deviation of just
+7.5bp. So each bond is scored against **its own** trailing 60-day window,
+which is the question a switch trade actually asks.
+
+**The window excludes the day being scored**, so no z-score has seen the
+value it scores and the stored history stays usable as a backtest.
+
+Switch candidates apply the same idea to a pair of bonds maturing within
+two years of each other: the spread between their residuals, z-scored
+against its own history. Positive means the first leg has become unusually
+cheap against the second.
+
+### Does it work?
+
+`python -m signals.validate` measures it. On this sample the residuals
+mean-revert with an **AR(1) of 0.94, a half-life of about 11 days**, and
+the relationship is monotone across every z bucket at 5, 10 and 20 days:
+
+| signal | 10-day capture | right direction |
+|---|---|---|
+| single bond, \|z\| > 2 | 4.1bp | 65% |
+| switch pair, \|z\| > 2 | 5.8bp | 66% |
+| switch pair, \|z\| > 3 | 11.7bp | — |
+
+**Read those against costs before trading.** The median bid-offer is 16bp,
+so crossing both legs of a switch costs more than a \|z\|>2 signal has
+historically returned. `signals.report` therefore prints the cost beside
+every candidate and labels it "below costs" when it does not clear —
+which, on a typical day, most do not. The realistic use is ranking and
+timing trades you were going to do anyway, not a standalone strategy.
+
+Quotes wider than 50bp are hidden from the report entirely: they are not
+dealable prices, and they would otherwise top the cheap list every day.
+
+Caveat worth repeating: this is one 9-month sample in one regime, measured
+in-sample. It is evidence the mechanism works, not an estimate of what it
+would pay.
+
 ## Out of scope
 
-Signals, any UI. `pipeline/indicators.py` remains a stub.
+Any UI. `pipeline/indicators.py` remains a stub.
