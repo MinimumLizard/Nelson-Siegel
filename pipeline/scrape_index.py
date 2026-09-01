@@ -144,6 +144,39 @@ def parse_trade_summary_index(html: bytes | str) -> list[IndexEntry]:
     return entries
 
 
+def parse_auction_index(html: bytes | str) -> list[IndexEntry]:
+    """One year's bond-auction page -> the English press releases.
+
+    Each auction is published in English, Sinhala and Tamil under near
+    identical titles, so the language suffix ("... | English") is what
+    selects the file. The same auction also appears twice in another
+    sense: once as the competitive result and once as the issuance-window
+    follow-up, under the SAME title — those are genuinely different
+    documents and both are kept; the parser tells them apart by content.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    body = soup.select_one(".page-template--body__content") or soup
+    entries: list[IndexEntry] = []
+    seen: set[str] = set()
+    for anchor in body.find_all("a", href=True):
+        href = anchor["href"]
+        if "/api/file/" not in href:
+            continue
+        if href.startswith("/"):
+            href = "https://www.treasury.gov.lk" + href
+        if href in seen:
+            continue
+        label = dates.collapse_ws(anchor.get_text(" ", strip=True))
+        if "english" not in label.lower():
+            continue
+        seen.add(href)
+        row_text = dates.collapse_ws(anchor.parent.get_text(" ", strip=True))
+        entries.append(IndexEntry(href, "bond_auction",
+                                  dates.parse_spelled(label),
+                                  dates.parse_dmy(row_text)))
+    return entries
+
+
 def file_uuid(url: str) -> str:
     """The /api/file/<uuid> tail — used as the cache filename and raw_ref."""
     return url.rstrip("/").rsplit("/", maxsplit=1)[-1]

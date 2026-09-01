@@ -22,7 +22,7 @@ from datetime import date, timedelta
 
 import xlrd
 
-from pipeline import dates, db, isin
+from pipeline import dates, db, isin, series
 
 log = logging.getLogger(__name__)
 
@@ -181,20 +181,20 @@ def _parse_quote_row(values, columns, series_match, reporting, path) -> dict | N
     if maturity is None:
         return None
 
-    # Step-coupon bonds carry several rates ("12%9%2027A"): record the first
-    # step as coupon_pct and keep the full label so nothing is lost.
-    #
     # NO ISIN here, deliberately. The sheet's "Maturity Period (Years)"
     # column does NOT match the tenor digits inside real ISINs (verified:
     # LKB00934F154 encodes 9, the column says 8), so an ISIN cannot be
-    # rebuilt from this sheet. ingest.py joins each quote to a real ISIN —
-    # learned from the volumes/trade-summary files — via maturity + coupon.
-    coupon_steps = re.findall(r"\d{1,2}(?:\.\d{1,2})?", series_match.group(1))
-    label = dates.collapse_ws(series_match.group(0))
+    # rebuilt from this sheet. ingest.py joins each quote to a real ISIN by
+    # its series label, which the auction releases publish next to the ISIN.
+    printed_label = dates.collapse_ws(series_match.group(0))
+    steps = series.coupon_steps(printed_label)
 
     return {
-        "coupon_pct": float(coupon_steps[0]),
-        "series_label": label if len(coupon_steps) > 1 else None,
+        # Step-coupon bonds ("12%9%2027A") chain several rates; coupon_pct
+        # holds the first and the printed label is kept so nothing is lost.
+        "coupon_pct": steps[0] if steps else None,
+        "series_label": series.normalise(printed_label),
+        "printed_label": printed_label if len(steps) > 1 else None,
         "maturity_date": maturity,
         "bid_price": float(bid_price) if isinstance(bid_price, (int, float)) and bid_price > 0 else None,
         "offer_price": float(offer_price) if isinstance(offer_price, (int, float)) and offer_price > 0 else None,

@@ -83,3 +83,33 @@ def test_decode_rejects_bad_check_digit():
 def test_decode_rejects_bills_and_noise():
     assert isin.decode("LKA09126J300") is None  # a T-bill, not a bond
     assert isin.decode("Total") is None
+
+
+# ---------------------------------------------------------------------------
+# Series labels — the key that joins a quote to an ISIN, so the two sources
+# must normalise identically (quote sheet vs auction press release).
+# ---------------------------------------------------------------------------
+
+def test_series_normalise_across_sources():
+    from pipeline import series
+    # Same bond as printed by the quote sheet and by an auction release.
+    assert series.normalise("10.00%2030A") == series.normalise("10.00%2030 ‘A’")
+    # Zero padding differs between releases.
+    assert series.normalise("09.50%2030 ‘A’") == "9.50%2030A"
+    assert series.normalise("18.00%2031A ") == "18.00%2031A"
+
+
+def test_series_keeps_every_step_coupon():
+    from pipeline import series
+    # Restructuring bonds chain rates; dropping later steps would merge
+    # two genuinely different bonds under one key.
+    assert series.normalise("12.4%7.5%5%2029A") == "12.40%7.50%5.00%2029A"
+    assert series.coupon_steps("12%9%2027A") == [12.0, 9.0]
+    assert series.coupon_steps("11.25%2026A") == [11.25]
+
+
+def test_series_rejects_non_labels():
+    from pipeline import series
+    assert series.normalise("Total") is None
+    assert series.normalise("") is None
+    assert series.normalise(None) is None

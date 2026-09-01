@@ -47,7 +47,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
-from pipeline import dates, db, isin as isin_mod
+from pipeline import dates, db, isin as isin_mod, series
 from pipeline.parse_daily import ParseError
 
 log = logging.getLogger(__name__)
@@ -69,19 +69,6 @@ class Auction:
     kind: str                      # 'auction' (table) | 'issuance' (prose)
     settlement_date: date | None = None
     bonds: list[dict] = field(default_factory=list)
-
-
-def normalise_series(label: str) -> str | None:
-    """Canonical form of a series label, comparable across sources.
-
-    "10.00%2030 'A'" (press release) and "10.00%2030A" (quote sheet) both
-    become "10.00%2030A". Returns None if the text isn't a series label.
-    """
-    match = SERIES_RE.search(dates.collapse_ws(label))
-    if not match:
-        return None
-    coupon, year, series = match.groups()
-    return f"{float(coupon):.2f}%{year}{series}"
 
 
 def _clean(cell) -> str:
@@ -209,7 +196,7 @@ def _parse_table(table, result: Auction, path) -> None:
     first_column, isins = _bond_columns(table)
     rows = _field_rows(table, first_column, len(isins))
 
-    labels = _find_field(rows, "Series", normalise_series) or []
+    labels = _find_field(rows, "Series", series.normalise) or []
     maturities = _find_field(rows, "Maturity", dates.parse_spelled) or []
     coupons = _find_field(rows, "Coupon Rate", _to_number) or []
     offered = _find_field(rows, "Amount Offered", _mn) or []
