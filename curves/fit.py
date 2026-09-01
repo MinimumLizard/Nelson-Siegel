@@ -3,6 +3,7 @@
     python -m curves.fit                     # every day not yet fitted
     python -m curves.fit --all               # refit everything
     python -m curves.fit --date 2026-08-28 --plot
+    python -m curves.fit --calibrate        # re-choose lambda, refit everything
 
 **What goes into the fit, and why.** The curve is fitted on the dealers'
 two-way quote MIDS, not on executed trades, because coverage decides curve
@@ -242,6 +243,10 @@ def main() -> None:
                         help="re-choose the sample-wide lambda, then refit every day")
     parser.add_argument("--plot", action="store_true",
                         help="save a chart of the fitted curve vs the day's trades")
+    parser.add_argument("--plot-latest", action="store_true",
+                        help="(re)draw data/reports/curve_latest.png for the newest "
+                             "fitted day — one stable filename, so the daily job "
+                             "does not accumulate a chart per date in the repo")
     args = parser.parse_args()
 
     conn = db.connect()
@@ -251,7 +256,10 @@ def main() -> None:
         args.all = True
     dates = [args.date] if args.date else available_dates(conn, only_new=not args.all)
     if not dates:
+        # Not an error, and not a reason to skip the chart: on most days the
+        # daily job finds nothing new and still wants curve_latest.png drawn.
         print("nothing to fit — every day already has a curve (use --all to refit)")
+        _draw(conn, args, fallback_date=None)
         return
 
     lam = get_lambda(conn)
@@ -270,10 +278,20 @@ def main() -> None:
                           f"RMSE {summary['trade_rmse_bp']:.1f}bp")
     conn.commit()
     print(f"fitted {fitted} day(s)")
+    _draw(conn, args, fallback_date=dates[-1])
 
-    if args.plot:
-        from curves import plot
-        plot.plot_day(conn, dates[-1])
+
+def _draw(conn, args, fallback_date) -> None:
+    """Charts requested on the command line, if any."""
+    if not (args.plot or args.plot_latest):
+        return
+    from curves import plot
+    if args.plot and fallback_date:
+        plot.plot_day(conn, fallback_date)
+    if args.plot_latest:
+        row = conn.execute("SELECT MAX(obs_date) AS d FROM curve_fits").fetchone()
+        if row and row["d"]:
+            plot.plot_day(conn, row["d"], plot.REPORTS_DIR / "curve_latest.png")
 
 
 if __name__ == "__main__":

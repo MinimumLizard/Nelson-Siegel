@@ -9,6 +9,11 @@ data/raw/
 data/samples/
 data/index_html/
 
+# Per-date curve charts are for exploring by hand; only the stable
+# data/reports/curve_latest.png is committed, so the daily job does not add
+# a new image to the repository every day.
+data/reports/curve_2*.png
+
 # NOT ignored, deliberately: data/sgcp.sqlite and data/reports/*.png.
 # The scheduled GitHub Action commits a freshly updated database and charts
 # every day, so cloning this repo gives you current data without running
