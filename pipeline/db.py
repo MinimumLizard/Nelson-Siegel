@@ -103,6 +103,44 @@ CREATE TABLE IF NOT EXISTS fills (
     deal_ref     TEXT
 );
 
+-- Settings the curve stage calibrates once and then reuses (lambda_years).
+CREATE TABLE IF NOT EXISTS curve_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- One fitted Nelson-Siegel curve per day (written by the curves/ package).
+-- The trade_* columns are the daily honesty check: how the curve, fitted on
+-- dealer quotes, compares with the bonds that actually traded that day.
+CREATE TABLE IF NOT EXISTS curve_fits (
+    obs_date      TEXT PRIMARY KEY,
+    beta0         REAL,     -- long-run level, percent
+    beta1         REAL,     -- slope: beta0+beta1 is the very short end
+    beta2         REAL,     -- curvature (the hump)
+    lambda_years  REAL,     -- where the hump sits
+    n_quotes      INTEGER,  -- bonds the curve was fitted on
+    rmse_bp       REAL,     -- weighted fit error, basis points
+    n_trades      INTEGER,  -- traded bonds available to check against
+    trade_rmse_bp REAL,
+    trade_bias_bp REAL,     -- mean(traded - fitted); the quote/trade gap
+    fitted_at     TEXT
+);
+
+-- Per-bond distance from the fitted curve. This is what the signals stage
+-- consumes. SIGN CONVENTION: residual_bp = observed - fitted, so POSITIVE
+-- means the bond yields more than the curve says it should — i.e. CHEAP.
+CREATE TABLE IF NOT EXISTS curve_residuals (
+    obs_date       TEXT NOT NULL,
+    isin           TEXT NOT NULL,
+    source         TEXT NOT NULL,  -- 'quote' (in the fit) | 'trade' (check)
+    tau_years      REAL,
+    observed_yield REAL,
+    fitted_yield   REAL,
+    residual_bp    REAL,
+    weight         REAL,           -- relative weight this point carried
+    PRIMARY KEY (obs_date, isin, source)
+);
+
 -- Bookkeeping for every remote file: what we downloaded, its hash, which
 -- report date it turned out to cover, and whether parsing succeeded.
 -- parse_status: 'pending' | 'ok' | 'failed'
@@ -124,6 +162,7 @@ INDEXES = """
 CREATE INDEX IF NOT EXISTS bonds_series ON bonds(series_label);
 CREATE INDEX IF NOT EXISTS observations_isin ON observations(isin, source);
 CREATE INDEX IF NOT EXISTS trade_summary_date ON trade_summary(obs_date);
+CREATE INDEX IF NOT EXISTS curve_residuals_isin ON curve_residuals(isin, source);
 """
 
 
