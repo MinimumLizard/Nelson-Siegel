@@ -136,22 +136,77 @@ def test_illiquid_bond_is_not_tradeable(tmp_path):
     assert liquidity.is_tradeable(facts.get("LKB01237G019"))
 
 
-def test_benchmark_clears_a_lower_bar_but_not_a_waiver(tmp_path):
-    """Freshly auctioned paper is dealable before its trade record catches
-    up — but a benchmark that never trades is still not tradeable."""
+def test_tiers_separate_the_core_book_from_the_rest(tmp_path):
+    """Three tiers, three different jobs.
+
+    core   — a current auction benchmark that is genuinely trading. The book.
+    active — trades enough to act on, but is not on the run.
+    wider  — quoted, barely traded. Stays in the CURVE, out of the signals.
+    """
     from signals import liquidity
     conn = db.connect(tmp_path / "liq.sqlite")
-    _seed_liquidity(conn, "LKB00531B017", days=4)     # thin, but auctioned
+    _seed_liquidity(conn, "LKB00531B017", days=12)    # auctioned and trading
+    _seed_liquidity(conn, "LKB00934F154", days=12)    # trading, never auctioned
+    _seed_liquidity(conn, "LKB01035F159", days=4)     # auctioned, barely trades
     conn.commit()
-    for isin in ("LKB00531B017", "LKB01136H151"):     # the second never trades
+    for isin in ("LKB00531B017", "LKB01035F159", "LKB01136H151"):
         db.upsert_auction(conn, "2026-07-30", isin, "announced", "2026-08-03",
                           None, 1_000_000_000, None, None, "t")
     conn.commit()
 
     facts = liquidity.profile(conn, "2026-09-01")
-    assert facts["LKB00531B017"]["is_benchmark"]
-    assert liquidity.is_tradeable(facts["LKB00531B017"])      # 4 days >= 3
-    assert not liquidity.is_tradeable(facts.get("LKB01136H151"))  # never traded
+    assert facts["LKB00531B017"]["tier"] == "core"
+    assert facts["LKB00934F154"]["tier"] == "active"
+    # Being a benchmark lowers the bar; it does not waive it. Four days is
+    # under BENCHMARK_MIN_DAYS, so this one is still not something to act on.
+    assert facts["LKB01035F159"]["tier"] == "wider"
+    assert not liquidity.is_tradeable(facts["LKB01035F159"])
+    # Announced but never traded: no trade rows at all, so still not dealable.
+    assert facts["LKB01136H151"]["is_benchmark"]
+    assert not liquidity.is_tradeable(facts["LKB01136H151"])
+
+    assert liquidity.is_core(facts["LKB00531B017"])
+    assert not liquidity.is_core(facts["LKB00934F154"])   # active is not core
+    assert liquidity.is_tradeable(facts["LKB00934F154"])  # but is tradeable
+
+
+def test_auction_cycle_is_measured_from_the_scoring_date(tmp_path):
+    """`post_auction` marks the fortnight after an auction, in which this
+    sample's bonds sat about 6bp cheap to their own norm. It must be judged as
+    of the day being scored, not as of today."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    _seed_liquidity(conn, "LKB00531B017", days=20, end="2026-09-01")
+    conn.commit()
+    db.upsert_auction(conn, "2026-08-25", "LKB00531B017", "auction", "2026-08-27",
+                      11.5, 1_000_000_000, 4_000_000_000, 1_000_000_000, "t")
+    conn.commit()
+
+    fresh = liquidity.profile(conn, "2026-09-01")["LKB00531B017"]
+    assert fresh["days_since_auction"] == 7
+    assert fresh["post_auction"]
+    assert fresh["bid_to_cover"] == 4.0
+
+    # Three weeks on, the same auction is outside the window.
+    later = liquidity.profile(conn, "2026-09-20")["LKB00531B017"]
+    assert later["days_since_auction"] == 26
+    assert not later["post_auction"]
+
+
+def test_an_auction_after_the_scoring_date_is_invisible(tmp_path):
+    """No lookahead: a bond is not a benchmark on a day before it was sold."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    _seed_liquidity(conn, "LKB00531B017", days=20, end="2026-09-01")
+    conn.commit()
+    db.upsert_auction(conn, "2026-08-25", "LKB00531B017", "auction", "2026-08-27",
+                      11.5, 1_000_000_000, 4_000_000_000, 1_000_000_000, "t")
+    conn.commit()
+
+    before = liquidity.profile(conn, "2026-08-20")["LKB00531B017"]
+    assert not before["is_benchmark"]
+    assert before["bid_to_cover"] is None
+    assert before["tier"] == "active"          # trading, but not on the run yet
 
 
 def test_liquidity_window_ignores_the_future(tmp_path):

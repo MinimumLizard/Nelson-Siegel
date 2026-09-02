@@ -6,6 +6,12 @@ The page is plain HTML with an inline SVG chart and no external requests, so
 it works from a file:// path, from GitHub Pages, or anywhere else it is
 dropped. The daily job regenerates it, which is why nothing here takes
 arguments about what to show: it always renders the most recent day.
+
+It leads with the CORE BOOK — the current auction benchmarks that are
+genuinely trading — because that is the paper a decision can actually be
+executed in. Bonds that trade but are off the run come second, and the rest
+of the market is fitted into the curve but not listed. See
+`signals/liquidity.py` for why that ordering is not cosmetic.
 """
 
 import argparse
@@ -50,16 +56,27 @@ def gather(conn) -> dict | None:
                  if spread <= MAX_TRADEABLE_SPREAD_BP
                  and liquidity.is_tradeable(facts.get(isin))}
 
+    core_isins = {isin for isin in tradeable if liquidity.is_core(facts.get(isin))}
+
+    # Sorted cheap-first: a positive z means the bond yields more than its own
+    # recent norm, which is what "cheap" means here.
     signals = [dict(r) for r in conn.execute(
         """SELECT s.*, b.series_label, b.maturity_date FROM bond_signals s
              JOIN bonds b USING(isin) WHERE s.obs_date=? ORDER BY s.zscore DESC""",
         (obs_date,)) if r["isin"] in tradeable]
+    core = [row for row in signals if row["isin"] in core_isins]
+    others = [row for row in signals if row["isin"] not in core_isins]
+    # A pair is only a trade if you can deal in BOTH sides, so switches are
+    # restricted to two core legs rather than anything merely quoted.
     switches = [dict(r) for r in conn.execute(
         """SELECT s.*, ba.series_label AS label_a, bb.series_label AS label_b
              FROM switch_signals s
              JOIN bonds ba ON ba.isin=s.isin_a JOIN bonds bb ON bb.isin=s.isin_b
             WHERE s.obs_date=? ORDER BY ABS(s.zscore) DESC""", (obs_date,))
-        if r["isin_a"] in tradeable and r["isin_b"] in tradeable][:8]
+        if {r["isin_a"], r["isin_b"]} <= core_isins][:8]
+    waiting = _waiting(conn, obs_date, facts)
+    labels = {r["isin"]: r["series_label"] or r["isin"]
+              for r in conn.execute("SELECT isin, series_label FROM bonds")}
 
     coverage = conn.execute(
         """SELECT COUNT(*) AS days, MIN(obs_date) AS first, MAX(obs_date) AS last
@@ -74,11 +91,40 @@ def gather(conn) -> dict | None:
     return {
         "obs_date": obs_date, "fit": fit, "residuals": residuals,
         "spreads": spreads, "signals": signals, "switches": switches,
-        "liquidity": facts,
+        "core": core, "others": others, "core_isins": core_isins,
+        "waiting": waiting, "liquidity": facts, "labels": labels,
         "coverage": dict(coverage),
         "last_checked": dict(last_checked) if last_checked else None,
         "hidden": len(spreads) - len(tradeable),
     }
+
+
+def _waiting(conn, obs_date, facts) -> list[dict]:
+    """Tradeable bonds quoted today that have no z-score yet.
+
+    A bond auctioned last month is the most tradeable paper on the screen and
+    the least likely to have the ~30 days of residual history a z-score needs.
+    Dropping it silently would hide exactly what matters most, so it is named
+    with the history it has so far.
+    """
+    scored = {r["isin"] for r in conn.execute(
+        "SELECT isin FROM bond_signals WHERE obs_date=?", (obs_date,))}
+    quoted = {r["isin"] for r in conn.execute(
+        """SELECT isin FROM observations WHERE obs_date=? AND source='pdmo_daily'
+             AND bid_yield IS NOT NULL""", (obs_date,))}
+    labels = {r["isin"]: r["series_label"]
+              for r in conn.execute("SELECT isin, series_label FROM bonds")}
+    out = []
+    for isin, fact in sorted(facts.items(), key=lambda kv: -kv[1]["turnover_lkr"]):
+        if isin not in quoted or isin in scored or not liquidity.is_tradeable(fact):
+            continue
+        days = conn.execute(
+            """SELECT COUNT(*) c FROM curve_residuals
+                WHERE isin=? AND source='quote' AND obs_date<=?""",
+            (isin, obs_date)).fetchone()["c"]
+        out.append({"isin": isin, "label": labels.get(isin) or isin,
+                    "days": days, "facts": fact})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -151,15 +197,23 @@ def curve_svg(data) -> str:
         points.append(f"{sx(tau):.1f},{sy(float(ns.predict([tau], betas, fit['lambda_years'])[0])):.1f}")
     parts.append(f'<polyline class="fitline" points="{" ".join(points)}"/>')
 
-    # Quote marks, sized by the weight each carried in the fit.
+    # Quote marks, sized by the weight each carried in the fit. Core bonds are
+    # drawn solid and the rest faded — an intensity difference, deliberately
+    # not a fourth colour, since three categorical hues are already on screen.
     quotes = [r for r in residuals if r["source"] == "quote"]
+    core_isins = data.get("core_isins") or set()
+    labels = data.get("labels") or {}
     max_weight = max((r["weight"] or 1.0) for r in quotes) if quotes else 1.0
     for row in quotes:
         weight = row["weight"] or 1.0
         radius = 4.0 + 3.5 * (weight / max_weight) ** 0.5
-        tip = (f'{row["isin"]} · {row["tau_years"]:.1f}y · {row["observed_yield"]:.2f}% · '
-               f'{row["residual_bp"]:+.0f}bp vs curve')
-        parts.append(f'<circle class="quote" cx="{sx(row["tau_years"]):.1f}" '
+        is_core = row["isin"] in core_isins
+        name = labels.get(row["isin"]) or row["isin"]
+        tip = (f'{name} · {row["tau_years"]:.1f}y · {row["observed_yield"]:.2f}% · '
+               f'{row["residual_bp"]:+.0f}bp vs curve'
+               + (" · core book" if is_core else ""))
+        parts.append(f'<circle class="quote{" core" if is_core else ""}" '
+                     f'cx="{sx(row["tau_years"]):.1f}" '
                      f'cy="{sy(row["observed_yield"]):.1f}" r="{radius:.1f}" '
                      f'data-tip="{html.escape(tip)}"><title>{html.escape(tip)}</title></circle>')
 
@@ -205,8 +259,9 @@ h2 { font-size: 15px; margin: 32px 0 10px; }
 .tick, .axis-label { fill: var(--muted); font-size: 11px; }
 .fitline { fill: none; stroke: var(--series-1); stroke-width: 2;
            stroke-linecap: round; }
-.quote { fill: var(--muted); fill-opacity: .55; stroke: var(--surface);
+.quote { fill: var(--muted); fill-opacity: .38; stroke: var(--surface);
          stroke-width: 2; }
+.quote.core { fill: var(--ink-2); fill-opacity: .95; }
 .trade { fill: var(--series-2); stroke: var(--surface); stroke-width: 2; }
 .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--ink-2);
           font-size: 12px; margin-top: 10px; }
@@ -236,6 +291,8 @@ tr:last-child td { border-bottom: none; }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
          color: var(--ink-2); white-space: nowrap; }
 .badge i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.hot { color: var(--series-2); font-weight: 600; }
+.tier { color: var(--muted); font-size: 12.5px; margin: -4px 0 10px; }
 .foot { color: var(--ink-2); font-size: 12.5px; margin-top: 10px; }
 .foot code { background: var(--neutral); padding: 1px 5px; border-radius: 4px; }
 .empty { color: var(--muted); }
@@ -260,7 +317,16 @@ for (const mark of document.querySelectorAll('[data-tip]')) {
 
 
 def _signal_rows(signals, spreads, cheap: bool, limit=6, facts=None) -> str:
-    rows = signals[:limit] if cheap else list(reversed(signals[-limit:]))
+    """One side of a tier: the cheapest, or the richest.
+
+    Split on the SIGN of the z-score rather than by slicing `limit` rows off
+    each end of the sorted list. A z-score is the gap divided by a positive
+    standard deviation, so its sign is the direction — which means every row
+    lands under the right heading, and a list shorter than 2*limit can no
+    longer put the same bond in both tables, as end-slicing did.
+    """
+    side = [row for row in signals if (row["zscore"] >= 0) == cheap]
+    rows = side[:limit] if cheap else list(reversed(side[-limit:]))
     widest = max((abs(r["dislocation_bp"]) for r in signals), default=1.0) or 1.0
     cells = []
     for row in rows:
@@ -282,6 +348,57 @@ def _signal_rows(signals, spreads, cheap: bool, limit=6, facts=None) -> str:
             f'<td style="width:30%"><div class="bar {side}">'
             f'<span style="width:{share:.1f}%"></span></div></td></tr>')
     return "".join(cells)
+
+
+def _core_rows(core, spreads, facts) -> str:
+    """The core book in full, cheapest at the top.
+
+    Unlike the other tables this one is never trimmed. It is only ever a
+    handful of bonds, it is the book a decision is executed in, and a
+    benchmark sitting in the MIDDLE of the pack is itself worth seeing.
+    """
+    widest = max((abs(row["dislocation_bp"]) for row in core), default=1.0) or 1.0
+    out = []
+    for row in core:
+        gap = row["dislocation_bp"]
+        share = min(abs(gap) / widest, 1.0) * 50.0
+        side = "cheap" if gap >= 0 else "rich"
+        fact = facts.get(row["isin"], {})
+        spread = spreads.get(row["isin"])
+        spread_cell = f"{spread:.0f}" if spread is not None else "–"
+        since = fact.get("days_since_auction")
+        if since is None:
+            auction = "–"
+        elif fact.get("post_auction"):
+            auction = (f'<span class="hot" title="still inside the '
+                       f'{liquidity.POST_AUCTION_DAYS}-day window in which freshly '
+                       f'auctioned paper has sat cheap">{since}d</span>')
+        else:
+            auction = f'{since}d'
+        cover = f'{fact["bid_to_cover"]:.1f}×' if fact.get("bid_to_cover") else "–"
+        out.append(
+            f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td>'
+            f'<td>{gap:+.1f}</td><td>{row["zscore"]:.1f}</td>'
+            f'<td>{spread_cell}</td>'
+            f'<td>{fact.get("turnover_lkr", 0) / 1e9:.0f}</td>'
+            f'<td>{fact.get("days_traded", 0)}</td>'
+            f'<td>{auction}</td><td>{cover}</td>'
+            f'<td style="width:22%"><div class="bar {side}">'
+            f'<span style="width:{share:.1f}%"></span></div></td></tr>')
+    return "".join(out)
+
+
+def _waiting_note(waiting) -> str:
+    """One line naming tradeable bonds that cannot be scored yet."""
+    if not waiting:
+        return ""
+    items = ", ".join(
+        f'<b>{html.escape(row["label"])}</b> ({row["days"]} quote days, '
+        f'Rs {row["facts"]["turnover_lkr"] / 1e9:.0f}bn traded)' for row in waiting)
+    return (f'<p class="foot">Trading, but not scored yet — a z-score needs about '
+            f'30 days of history and these have less: {items}. They are on the '
+            f'chart and in the curve; they simply have no norm to be measured '
+            f'against so far.</p>')
 
 
 def _switch_rows(switches, spreads) -> str:
@@ -319,7 +436,12 @@ def render(data, fragment: bool = False) -> str:
         bias_note = f'{checked["n_trades"]} trades on {checked["obs_date"]}'
     else:
         bias_value, bias_note = "–", "no trades recorded yet"
+    core = data.get("core", [])
+    core_turnover = sum(data["liquidity"].get(row["isin"], {}).get("turnover_lkr", 0)
+                        for row in core) / 1e9
     tiles = [
+        ("core book", f'{len(core)}',
+         f'benchmarks trading · Rs {core_turnover:.0f}bn in {liquidity.WINDOW_DAYS} days'),
         ("bonds on the curve", f'{fit["n_quotes"]}', "quotes fitted"),
         ("fit error", f'{fit["rmse_bp"]:.1f}<span style="font-size:15px">bp</span>', "weighted RMSE"),
         ("vs executed trades", bias_value, bias_note),
@@ -330,16 +452,30 @@ def render(data, fragment: bool = False) -> str:
         f'<div class="value">{value}</div><div class="note">{note}</div></div>'
         for label, value, note in tiles)
 
-    hidden = (f'<p class="foot">{data["hidden"]} quoted bond(s) hidden: too wide to '
-              f'deal on, or traded on fewer than {liquidity.MIN_DAYS_TRADED} of the '
-              f'last {liquidity.WINDOW_DAYS} days. Ranking on z-score alone surfaces '
-              f'exactly these — an illiquid bond is quoted from stale marks that jump '
-              f'when refreshed, so its score is largest precisely where it is least '
+    hidden = (f'<p class="foot"><b>The wider market.</b> {data["hidden"]} further '
+              f'quoted bond(s) are fitted into the curve but not listed: quoted '
+              f'wider than {MAX_TRADEABLE_SPREAD_BP:.0f}bp, or traded on fewer than '
+              f'{liquidity.MIN_DAYS_TRADED} of the last {liquidity.WINDOW_DAYS} days. '
+              f'They stay in the fit because the curve needs the whole cross-section '
+              f'to have a shape, but ranking on z-score alone surfaces exactly these '
+              f'— an illiquid bond is quoted from stale marks that jump when '
+              f'refreshed, so its score is largest precisely where it is least '
               f'tradeable.</p>' if data["hidden"] else "")
 
     head = ('<th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
             '<th title="turnover over the last 60 days">Rs bn</th><th></th>')
     has_trades = any(r["source"] == "trade" for r in data["residuals"])
+    core_table = (
+        f'<table><thead><tr><th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
+        f'<th title="turnover over the last {liquidity.WINDOW_DAYS} days">Rs bn</th>'
+        f'<th title="days traded in the last {liquidity.WINDOW_DAYS}">days</th>'
+        f'<th>auction</th><th title="bids over amount offered">cover</th><th></th>'
+        f'</tr></thead><tbody>'
+        f'{_core_rows(core, data["spreads"], data["liquidity"])}</tbody></table>'
+        if core else
+        f'<p class="empty">No current benchmark cleared the trading floor of '
+        f'{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS} '
+        f'today.</p>')
     trade_key = ('<span><i style="background:var(--series-2)"></i>executed trades, '
                  'held out of the fit</span>' if has_trades else
                  '<span class="muted-key">no executed trades published for this day yet</span>')
@@ -355,28 +491,44 @@ def render(data, fragment: bool = False) -> str:
     {curve_svg(data)}
     <div class="legend">
       <span><i class="line-key" style="background:var(--series-1)"></i>fitted curve</span>
-      <span><i style="background:var(--muted);opacity:.6"></i>dealer quotes, fitted (size = weight)</span>
+      <span><i style="background:var(--ink-2)"></i>core book (size = weight in the fit)</span>
+      <span><i style="background:var(--muted);opacity:.38"></i>the rest of the market, also fitted</span>
       {trade_key}
     </div>
   </div>
 
+  <h2>Core book — auction benchmarks that are actually trading</h2>
+  <p class="tier">Cheapest at the top, richest at the bottom. This is the paper
+     the PDMO is issuing now and dealers make real prices in, so it is where a
+     decision can be executed in size. Shown in full rather than trimmed to the
+     extremes: a benchmark sitting mid-pack is information too.</p>
+  <div class="card">{core_table}</div>
+  <p class="foot"><b>Rs bn</b> and <b>days</b> are turnover and days traded over
+     the last {liquidity.WINDOW_DAYS} · <b>auction</b> is days since this bond
+     was last sold, <span class="hot">highlighted</span> inside the
+     {liquidity.POST_AUCTION_DAYS}-day window in which freshly auctioned paper
+     has sat about 6bp cheap to its own norm · <b>cover</b> is bids over the
+     amount offered at that auction, so how much demand the last supply met.</p>
+  {_waiting_note(data.get("waiting", []))}
+
+  <h2>Also trading — liquid, but not on the run</h2>
   <div class="cols">
     <div>
       <h2>Cheap — yields above its own norm</h2>
       <div class="card"><table><thead><tr>{head}</tr></thead>
-        <tbody>{_signal_rows(data["signals"], data["spreads"], cheap=True,
-                             facts=data["liquidity"])}</tbody></table></div>
+        <tbody>{_signal_rows(data.get("others", data["signals"]), data["spreads"],
+                             cheap=True, facts=data["liquidity"])}</tbody></table></div>
     </div>
     <div>
       <h2>Rich — yields below its own norm</h2>
       <div class="card"><table><thead><tr>{head}</tr></thead>
-        <tbody>{_signal_rows(data["signals"], data["spreads"], cheap=False,
-                             facts=data["liquidity"])}</tbody></table></div>
+        <tbody>{_signal_rows(data.get("others", data["signals"]), data["spreads"],
+                             cheap=False, facts=data["liquidity"])}</tbody></table></div>
     </div>
   </div>
   {hidden}
 
-  <h2>Switch candidates</h2>
+  <h2>Switch candidates — both legs in the core book</h2>
   <div class="card"><table><thead><tr>
     <th>buy</th><th>sell</th><th>gap bp</th><th>z</th><th>cost bp</th>
     <th>expected bp</th><th>verdict</th></tr></thead>

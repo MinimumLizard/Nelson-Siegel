@@ -3,12 +3,16 @@
     python -m signals.report                    # latest day
     python -m signals.report --date 2026-08-28 --top 8
 
-Only bonds that actually trade are listed. Ranking on z-score alone
-selects for the opposite: an illiquid bond is quoted from stale marks that
-jump when refreshed, so its residual moves in steps and its z-score is
-large, while a liquid benchmark is quoted continuously and barely moves.
-Left unfiltered the cheap list fills with bonds that traded once in three
-months while the most-traded bond in the market never appears.
+The report leads with the CORE book — current auction benchmarks that are
+genuinely trading, which is the paper a decision can be executed in. Bonds
+that trade but are not on the run follow; the rest of the market is fitted
+into the curve (it needs the whole cross-section to have a shape) but is
+not listed, because a dislocation you cannot deal on is not an opportunity.
+
+That ordering exists because ranking on z-score alone selects for the
+opposite: an illiquid bond is quoted from stale marks that jump when
+refreshed, so its residual moves in steps and its z-score is large, while a
+liquid benchmark is quoted continuously and barely moves.
 
 Every line puts the opportunity next to what it costs to take. The gap is
 how far a bond (or a pair) sits from its own recent norm; the cost is what
@@ -77,43 +81,85 @@ def show(conn, obs_date: str, top: int) -> None:
              FROM bond_signals s JOIN bonds b USING(isin)
             WHERE s.obs_date = ? ORDER BY s.zscore DESC""", (obs_date,)).fetchall()
     rows = [row for row in all_rows if row["isin"] in tradeable]
-    excluded = len(all_rows) - len(rows)
-    if excluded:
-        print(f"({excluded} bond(s) hidden: too wide to deal on, or fewer than "
-              f"{liquidity.MIN_DAYS_TRADED} trading days in the last "
-              f"{liquidity.WINDOW_DAYS})")
-    _building(conn, obs_date, facts, spreads)
+    hidden = len(all_rows) - len(rows)
     if not rows:
         print("no signals for this date (a bond needs ~30 days of history first)")
         return
 
-    def bond_table(title, subset):
+    def bond_table(title, subset, show_auction=False):
+        """One tier's rows, cheapest first. Empty subsets print nothing."""
+        if not subset:
+            return
         print(f"\n{title}")
-        print(f"  {'series':<20}{'resid':>8}{'norm':>8}{'gap':>8}{'z':>7}"
-              f"{'b/o':>6}{'Rs bn':>8}{'days':>6}  ")
+        header = (f"  {'series':<18}{'resid':>8}{'norm':>8}{'gap':>8}{'z':>7}"
+                  f"{'b/o':>6}{'Rs bn':>8}{'days':>6}")
+        print(header + (f"{'auction':>10}{'cover':>7}" if show_auction else ""))
         for row in subset:
             spread = spreads.get(row["isin"])
             fact = facts.get(row["isin"], {})
-            mark = " *" if fact.get("is_benchmark") else ""
-            print(f"  {(row['series_label'] or row['isin']) + mark:<20}"
-                  f"{row['residual_bp']:>+8.1f}{row['mean_bp']:>+8.1f}"
-                  f"{row['dislocation_bp']:>+8.1f}{row['zscore']:>7.1f}"
-                  f"{(f'{spread:.0f}' if spread else '-'):>6}"
-                  f"{fact.get('turnover_lkr', 0) / 1e9:>8.1f}"
-                  f"{fact.get('days_traded', 0):>6}")
+            line = (f"  {(row['series_label'] or row['isin']):<18}"
+                    f"{row['residual_bp']:>+8.1f}{row['mean_bp']:>+8.1f}"
+                    f"{row['dislocation_bp']:>+8.1f}{row['zscore']:>7.1f}"
+                    f"{(f'{spread:.0f}' if spread else '-'):>6}"
+                    f"{fact.get('turnover_lkr', 0) / 1e9:>8.1f}"
+                    f"{fact.get('days_traded', 0):>6}")
+            if show_auction:
+                since = fact.get("days_since_auction")
+                marker = (f"{since}d" + ("*" if fact.get("post_auction") else "")
+                          if since is not None else "-")
+                cover = f"{fact['bid_to_cover']:.1f}x" if fact.get("bid_to_cover") else "-"
+                line += f"{marker:>10}{cover:>7}"
+            print(line)
 
-    bond_table("CHEAP — yields more than its own recent norm", rows[:top])
-    bond_table("RICH — yields less than its own recent norm", list(reversed(rows[-top:])))
+    def both_ends(subset, count):
+        """The cheap and the rich end of a tier, never the same bond twice.
 
+        Split on the SIGN of the z-score rather than by slicing `count` rows
+        off each end. A z-score is the gap divided by a positive standard
+        deviation, so its sign is the direction: every bond lands under the
+        heading that is true of it, and a tier with fewer than 2*count bonds
+        can no longer appear in both lists, as end-slicing made it.
+        """
+        cheap = [row for row in subset if row["zscore"] >= 0]
+        rich = [row for row in subset if row["zscore"] < 0]
+        bond_table("cheap to their own norm", cheap[:count])
+        bond_table("rich to their own norm", list(reversed(rich[-count:])))
+
+    core = [row for row in rows if liquidity.is_core(facts.get(row["isin"]))]
+    other = [row for row in rows if not liquidity.is_core(facts.get(row["isin"]))]
+
+    # The core book is printed in FULL, however long, rather than trimmed to
+    # the cheap and rich ends. It is only ever a handful of bonds, it is the
+    # book a decision is actually executed in, and where a benchmark sits in
+    # the middle of the pack is itself information.
+    print(f"\n=== CORE BOOK — {len(core)} auction benchmark(s), actually trading ===")
+    if core:
+        bond_table("cheapest at the top, richest at the bottom", core, show_auction=True)
+    else:
+        print("  none today: no current benchmark cleared the trading floor of "
+              f"{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS}")
+    if any(facts.get(row["isin"], {}).get("post_auction") for row in core):
+        print("\n  * still inside the post-auction window: over the 15 auctions in "
+              "this data\n    bonds sat about 6bp cheap to their own norm for a "
+              "fortnight afterwards.")
+    _building(conn, obs_date, facts)
+
+    if other:
+        print(f"\n=== ALSO TRADING — {len(other)} liquid, but not on the run ===")
+        both_ends(other, max(top - 2, 3))
+
+    # Switches are restricted to two core legs. A pair is only a trade if you
+    # can deal in BOTH sides, and the core book is where that is true.
     switches = [row for row in conn.execute(
         """SELECT s.*, ba.series_label AS label_a, bb.series_label AS label_b
              FROM switch_signals s
              JOIN bonds ba ON ba.isin = s.isin_a
              JOIN bonds bb ON bb.isin = s.isin_b
             WHERE s.obs_date = ? ORDER BY ABS(s.zscore) DESC""", (obs_date,))
-        if row["isin_a"] in tradeable and row["isin_b"] in tradeable][:top]
+        if {row["isin_a"], row["isin_b"]} <= {r["isin"] for r in core}][:top]
     if switches:
-        print("\nSWITCH CANDIDATES — buy the cheap leg, sell the rich leg")
+        print("\nSWITCH CANDIDATES — both legs in the core book; buy the cheap, "
+              "sell the rich")
         print(f"  {'buy':<20}{'sell':<20}{'gap':>8}{'z':>7}{'cost':>7}{'exp':>7}  verdict")
         for row in switches:
             # Positive z: A is cheap versus B. Negative: the other way round.
@@ -133,12 +179,19 @@ def show(conn, obs_date: str, top: int) -> None:
 
     print("\ngap = distance from its own recent norm, bp | z = in its own standard "
           "deviations\ncost = half the bid-offer on each leg | exp = historical "
-          "10-day reversion at this z\nRs bn / days = turnover and days traded "
-          f"in the last {liquidity.WINDOW_DAYS} | * = current auction benchmark")
+          "10-day reversion at this z\nRs bn / days = turnover and days traded in "
+          f"the last {liquidity.WINDOW_DAYS} | auction = days since it was last sold"
+          f"\n* = inside the {liquidity.POST_AUCTION_DAYS}-day post-auction window")
+    if hidden:
+        print(f"{hidden} scored bond(s) not shown: quoted wider than "
+              f"{MAX_TRADEABLE_SPREAD_BP:.0f}bp, or traded on fewer than "
+              f"{liquidity.MIN_DAYS_TRADED} of the last {liquidity.WINDOW_DAYS} days.\n"
+              "They stay IN the curve — it needs the whole cross-section to have a\n"
+              "shape — but a dislocation you cannot deal on is not an opportunity.")
 
 
-def _building(conn, obs_date, facts, spreads) -> None:
-    """Liquid bonds that have no z-score yet, listed rather than hidden.
+def _building(conn, obs_date, facts) -> None:
+    """Tradeable bonds that have no z-score yet, listed rather than hidden.
 
     A freshly auctioned benchmark is the most tradeable paper on the screen
     and the least likely to have 30 days of residual history, so silently
@@ -154,14 +207,16 @@ def _building(conn, obs_date, facts, spreads) -> None:
                if isin in quoted and isin not in scored and liquidity.is_tradeable(fact)]
     if not waiting:
         return
-    labels = {row["isin"]: row["series_label"] for row in conn.execute("SELECT isin, series_label FROM bonds")}
-    print("\nBUILDING HISTORY — liquid, but not enough days to score yet")
+    labels = {row["isin"]: row["series_label"]
+              for row in conn.execute("SELECT isin, series_label FROM bonds")}
+    print("\nNOT SCORED YET — tradeable, but short of the 30 days a z-score needs")
     for isin, fact in sorted(waiting, key=lambda kv: -kv[1]["turnover_lkr"]):
         days = conn.execute(
             """SELECT COUNT(*) c FROM curve_residuals
                 WHERE isin = ? AND source = 'quote' AND obs_date <= ?""",
             (isin, obs_date)).fetchone()["c"]
-        print(f"  {(labels.get(isin) or isin) + (' *' if fact['is_benchmark'] else ''):<20}"
+        tag = " (benchmark)" if fact["is_benchmark"] else ""
+        print(f"  {(labels.get(isin) or isin) + tag:<26}"
               f"{liquidity.describe(fact)}; {days} quote days so far")
 
 

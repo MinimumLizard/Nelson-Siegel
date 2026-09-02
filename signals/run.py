@@ -24,7 +24,11 @@ def rebuild(conn) -> dict:
 
     bonds = zscore.bond_signals(residuals)
     bonds["dislocation_bp"] = bonds["residual_bp"] - bonds["mean_bp"]
-    switches = zscore.switch_signals(residuals)
+    # Bonds ever auctioned pair with each other across the whole curve, which
+    # is how a benchmark book actually trades. "Ever" rather than "currently"
+    # keeps the pair universe fixed under the historical z-scores.
+    auctioned = {row["isin"] for row in conn.execute("SELECT DISTINCT isin FROM auctions")}
+    switches = zscore.switch_signals(residuals, auctioned)
     if not switches.empty:
         switches["dislocation_bp"] = switches["spread_bp"] - switches["mean_bp"]
 
