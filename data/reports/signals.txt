@@ -7,26 +7,26 @@ curve: 45 bonds, fit RMSE 7.1bp, lambda 2.82y
 cheapest at the top, richest at the bottom
   series               resid    norm     gap      z   b/o   Rs bn  days   auction  cover
   10.75%2037A           +6.8    +4.1    +2.7    0.3    16    34.2    24       34d   2.3x
-  10.85%2036A           +3.4    +1.8    +1.7    0.2    14    21.4    18       34d   2.1x
-  11.70%2034A           -0.5    -1.1    +0.6    0.2    17    80.6    24       34d   2.1x
-  11.00%2030A           -1.4    -1.0    -0.4   -0.0    14     4.6    13       83d   1.8x
+  10.85%2036A           +3.4    +1.8    +1.7    0.2    14    22.9    19       34d   2.1x
+  11.70%2034A           -0.5    -1.1    +0.6    0.2    17    83.4    25       34d   2.1x
+  11.00%2030A           -1.4    -1.0    -0.4   -0.0    14     5.0    14       83d   1.8x
   10.75%2034A           +2.6    +3.6    -1.0   -0.1    19     8.7     8      113d   3.4x
-  11.20%2033            +2.1    +4.9    -2.8   -0.3    18    14.8    21       98d   2.0x
-  11.00%2030B           -5.6    -0.1    -5.5   -0.5    12    61.2    30       51d   2.9x
-  11.50%2032A          -11.2    -5.0    -6.2   -0.8    14    10.8    16       83d   2.1x
-  10.00%2030A           -4.3   +12.3   -16.5   -1.8    12    41.2    30       8d*   4.0x
+  11.20%2033            +2.1    +4.9    -2.8   -0.3    18    16.3    22       98d   2.0x
+  11.00%2030B           -5.6    -0.1    -5.5   -0.5    12    61.7    31       51d   2.9x
+  11.50%2032A          -11.2    -5.0    -6.2   -0.8    14    11.8    17       83d   2.1x
+  10.00%2030A           -4.3   +12.3   -16.5   -1.8    12    41.4    31       8d*   4.0x
 
   * still inside the post-auction window: over the 15 auctions in this data
     bonds sat about 6bp cheap to their own norm for a fortnight afterwards.
 
 NOT SCORED YET — tradeable, but short of the 30 days a z-score needs
-  11.60%2031A (benchmark)   Rs 33.1bn over 20d; auctioned 2026-07-30; last cover 2.9x; 22 quote days so far
+  11.60%2031A (benchmark)   Rs 35.5bn over 21d; auctioned 2026-07-30; last cover 2.9x; 22 quote days so far
 
 === ALSO TRADING — 11 liquid, but not on the run ===
 
 cheap to their own norm
   series               resid    norm     gap      z   b/o   Rs bn  days
-  11.00%2028A           +9.3    -1.1   +10.4    1.2    17    10.7    11
+  11.00%2028A           +9.3    -1.1   +10.4    1.2    17    12.1    12
   11.00%2029A           -4.0    -7.5    +3.6    0.8    17     4.9    10
   10.75%2028A          +11.0    +7.3    +3.7    0.4    15     4.0    11
 
@@ -34,7 +34,7 @@ rich to their own norm
   series               resid    norm     gap      z   b/o   Rs bn  days
   11.25%2026A          -25.7    +5.0   -30.7   -2.4    18    22.1    10
   9.75%2030A            -2.3    +4.9    -7.2   -1.8    13    17.5    15
-  9.50%2030A            -0.5    +4.9    -5.5   -1.3    13    14.2    15
+  9.50%2030A            -0.5    +4.9    -5.5   -1.3    13    14.3    16
   10.75%2028B           +9.4   +12.6    -3.2   -0.2    18     4.2    14
 
 SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
