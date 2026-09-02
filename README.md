@@ -3,9 +3,8 @@
 Ingests Sri Lanka PDMO secondary-market data — Treasury bond two-way quotes,
 per-ISIN traded volumes, per-ISIN executed trades and primary auction
 results — into a SQLite database (`pipeline/`), then fits a yield curve to
-every day and measures how far each bond sits from it (`curves/`). A future
-and ranks rich/cheap and switch candidates from those residuals
-(`signals/`).
+every day and measures how far each bond sits from it (`curves/`), and
+ranks rich/cheap and switch candidates from those residuals (`signals/`).
 
 **All three stages are complete** — data layer, curves, signals — and the
 whole chain runs itself daily; see "The data updates itself" below.
@@ -59,6 +58,19 @@ only needed to run the pipeline yourself or to extend it.
 A day with nothing new (weekend, public holiday) simply makes no commit. To
 run it on demand, open the repository's **Actions** tab, pick **Daily PDMO
 update**, and press **Run workflow**.
+
+## The dashboard page
+
+`python -m dashboard.build` writes **`docs/index.html`**: a self-contained
+page — inline SVG chart, no external requests — showing the day's fitted
+curve, the cheap and rich lists, and the switch candidates with their costs.
+The daily Action rebuilds and commits it, so it stays current on its own.
+
+To publish it as a web page you can open from anywhere, enable GitHub Pages
+once: **Settings → Pages → Source: Deploy from a branch → Branch: `main`,
+folder: `/docs` → Save**. It is then served at
+`https://<your-username>.github.io/finance-tools-/` and refreshes every day.
+Until then the file opens fine straight from disk in any browser.
 
 ## Setup
 
