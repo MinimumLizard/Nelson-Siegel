@@ -1,4 +1,4 @@
-# SGCP RV Pipeline
+# Nelson-Siegel — Sri Lanka government bond relative value
 
 Ingests Sri Lanka PDMO secondary-market data — Treasury bond two-way quotes,
 per-ISIN traded volumes, per-ISIN executed trades and primary auction
@@ -53,7 +53,11 @@ published since the last run, parses it, refreshes the watched bonds' charts
 and commits the result back to this repository. Nothing needs to be running
 on your machine.
 
-That is why `data/sgcp.sqlite` and `data/reports/*.png` are committed here
+Each run also leaves `data/reports/signals.txt` — the day's core book as
+plain text — so the current state can be read straight from the repository
+without running anything.
+
+That is why `data/sgcp.sqlite` and `data/reports/*` are committed here
 (unusual for a database, deliberate in this case): the Action's runners are
 wiped after every job, so the repository itself is where the accumulated
 data lives. Cloning gives you current data immediately — the setup below is
@@ -67,14 +71,19 @@ update**, and press **Run workflow**.
 
 `python -m dashboard.build` writes **`docs/index.html`**: a self-contained
 page — inline SVG chart, no external requests — showing the day's fitted
-curve, the cheap and rich lists, and the switch candidates with their costs.
-The daily Action rebuilds and commits it, so it stays current on its own.
+curve with the core book drawn solid against the rest of the market, then
+the core book in full with its auction cycle, the off-the-run bonds that
+still trade, and the switch candidates with their costs. The daily Action
+rebuilds and commits it, so it stays current on its own.
 
-To publish it as a web page you can open from anywhere, enable GitHub Pages
-once: **Settings → Pages → Source: Deploy from a branch → Branch: `main`,
-folder: `/docs` → Save**. It is then served at
-`https://<your-username>.github.io/finance-tools-/` and refreshes every day.
-Until then the file opens fine straight from disk in any browser.
+It is published as a web page at
+
+**<https://minimumlizard.github.io/Nelson-Siegel/>**
+
+and refreshes every day. (GitHub Pages paths are case-sensitive, so the
+capitals matter.) It is served by GitHub Pages from **Settings → Pages →
+Source: Deploy from a branch → Branch: `main`, folder: `/docs`**; the file
+also opens fine straight from disk in any browser.
 
 ## Setup
 
@@ -227,12 +236,15 @@ which is the question a switch trade actually asks.
 **The window excludes the day being scored**, so no z-score has seen the
 value it scores and the stored history stays usable as a backtest.
 
-Switch candidates apply the same idea to a pair of bonds maturing within
-two years of each other: the spread between their residuals, z-scored
-against its own history. Positive means the first leg has become unusually
-cheap against the second.
+Switch candidates apply the same idea to a pair of bonds: the spread
+between their residuals, z-scored against its own history. Positive means
+the first leg has become unusually cheap against the second. For ordinary
+paper a pair has to mature within two years, otherwise the "switch" is
+really a bet on the shape of the whole curve — but bonds that have been
+auctioned pair with each other across the entire curve, because that is how
+a benchmark book is actually traded.
 
-### Only tradeable bonds are listed
+### Three tiers: the core book, also trading, the wider market
 
 Ranking on z-score alone **selects for the wrong bonds**, and this was a real
 defect until it was measured. An illiquid bond is quoted from stale marks
@@ -243,15 +255,48 @@ headed by bonds that had traded on 1 to 5 of the previous 60 days, while the
 single most-traded bond in the market — Rs 80bn over 60 days — did not appear
 at all.
 
-So a bond is only listed when it has actually been trading: at least 10 of
-the last 60 days, or 3 for a current auction benchmark, whose printed trade
-record lags its real dealability. Every row shows turnover and days traded,
-and benchmarks are marked, so the size of the opportunity can be judged
-against how much of it is real.
+Bonds are therefore sorted into three tiers (`signals/liquidity.py`), and
+the report and the dashboard both lead with the first:
 
-Liquid bonds that do not yet have 30 days of residual history — which is
-exactly what a freshly auctioned benchmark looks like — are listed
-separately as "building history" rather than silently dropped.
+| tier | test | what it is |
+|---|---|---|
+| **core** | auctioned in the last 120 days **and** traded on ≥ 8 of the last 60 | the current benchmarks — the paper the PDMO is issuing now and dealers make real prices in |
+| **active** | traded on ≥ 10 of the last 60 days | off the run, but liquid enough to act on |
+| **wider** | everything else quoted | fitted into the curve, not listed as a signal |
+
+Note the asymmetry: the wider market stays **in the curve** — dropping it
+would leave too few points to define the shape — while being demoted in the
+**signals**. The broad universe is the measuring stick; the core book is
+what you trade. Switch candidates require **two core legs**, since a pair is
+only a trade if you can deal in both sides.
+
+The core book is printed in full rather than trimmed to its cheap and rich
+extremes: it is only ever a handful of bonds, and a benchmark sitting
+mid-pack is information too. Every row carries turnover, days traded, days
+since the bond was last auctioned and the bid-to-cover it met there.
+
+Tradeable bonds that do not yet have 30 days of residual history — which is
+exactly what a freshly auctioned benchmark looks like — are named separately
+with the history they do have, rather than silently dropped.
+
+### The auction cycle
+
+Testing the 15 auctions in this data for the classic pre-auction concession
+found the **opposite** pattern. Bonds do not cheapen going in (+0.5bp on
+average over the ten days before, which is nothing); they cheapen **after**
+and stay cheap — about **+5.9bp** versus their own norm over the following
+fortnight, fading to +2.8bp by 15–30 days as the new supply is distributed.
+`python -m signals.validate` prints this table, so it can be re-checked as
+history grows.
+
+So the reports mark `post_auction` for 14 days after a sale and show
+`days_since_auction` on every core row, which lets a reading be judged
+against where the bond sits in its cycle: a benchmark showing +5bp cheap a
+week after its auction is closer to normal than the number alone suggests.
+
+On 44 events across 15 auction dates this is **suggestive, not
+established**, and 6bp sits below a typical 16bp bid-offer — it is
+context for a decision, not a trade on its own.
 
 ### Does it work?
 

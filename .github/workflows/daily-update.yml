@@ -2,10 +2,11 @@
 #
 # Every day this fetches whatever the PDMO has published since the last run,
 # parses it into data/sgcp.sqlite, fits that day's yield curve, recomputes the
-# relative-value signals, refreshes the charts and the dashboard page, and
-# commits the result back to this repository. A day with nothing new (weekend, public holiday) simply
-# makes no commit. Today's signals are printed into the run log, so the
-# Actions page doubles as a daily readout.
+# relative-value signals, refreshes the charts, the dashboard page and the
+# plain-text readout, and commits the result back to this repository. A day
+# with nothing new (weekend, public holiday) simply makes no commit. Today's
+# signals are printed into the run log too, so the Actions page doubles as a
+# daily readout.
 #
 # You can also start a run by hand: Actions tab -> "Daily PDMO update" ->
 # "Run workflow".
@@ -64,7 +65,9 @@ jobs:
         run: python -m signals.run
 
       - name: Print today's signals into the run log
-        run: python -m signals.report
+        # Also kept as a committed plain-text readout, so the day's core book
+        # can be read from the repository without running anything.
+        run: python -m signals.report | tee data/reports/signals.txt
 
       - name: Rebuild the dashboard page
         run: python -m dashboard.build

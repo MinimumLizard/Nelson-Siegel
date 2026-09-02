@@ -25,10 +25,17 @@ value it is scoring. That keeps the stored history honest as a backtest
 rather than something that quietly used tomorrow's information.
 
 Switch signals apply the same idea to a PAIR of bonds: the spread between
-two residuals, z-scored against its own trailing window. Pairs are limited
-to bonds maturing within a couple of years of each other, because that is
-what a switch trade looks like — sell one, buy its neighbour — rather than
-a bet on the shape of the whole curve.
+two residuals, z-scored against its own trailing window.
+
+Which pairs are worth tracking depends on the bonds. For ordinary paper a
+switch means selling one bond and buying its neighbour, so pairs are
+limited to maturities within a couple of years — otherwise the "switch" is
+really a bet on the shape of the whole curve. But the auction benchmarks
+are the exception: they are spread from 2030 to 2037 and a book trades
+between them across that whole range, so any two of them count as a pair
+regardless of the gap. Membership is decided by whether a bond has EVER
+been auctioned, not by whether it is on the run today, so the pair universe
+does not shift under the historical z-scores.
 """
 
 import itertools
@@ -77,14 +84,16 @@ def bond_signals(residuals: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(out).dropna(subset=["zscore"]).reset_index(drop=True)
 
 
-def candidate_pairs(residuals: pd.DataFrame) -> list[tuple[str, str]]:
-    """Bond pairs close enough in maturity to be a plausible switch."""
+def candidate_pairs(residuals: pd.DataFrame, auctioned=None) -> list[tuple[str, str]]:
+    """Pairs worth tracking: near neighbours, plus any two auction bonds."""
+    auctioned = set(auctioned or ())
     tau = residuals.groupby("isin")["tau_years"].median()
     return [(a, b) for a, b in itertools.combinations(sorted(tau.index), 2)
-            if abs(tau[a] - tau[b]) <= MAX_TAU_GAP_YEARS]
+            if abs(tau[a] - tau[b]) <= MAX_TAU_GAP_YEARS
+            or (a in auctioned and b in auctioned)]
 
 
-def switch_signals(residuals: pd.DataFrame) -> pd.DataFrame:
+def switch_signals(residuals: pd.DataFrame, auctioned=None) -> pd.DataFrame:
     """Z-scores of the residual SPREAD within each candidate pair.
 
     A positive z means bond A has become unusually cheap relative to B —
@@ -94,7 +103,7 @@ def switch_signals(residuals: pd.DataFrame) -> pd.DataFrame:
     tau = residuals.groupby("isin")["tau_years"].median()
 
     out = []
-    for first, second in candidate_pairs(residuals):
+    for first, second in candidate_pairs(residuals, auctioned):
         spread = (wide[first] - wide[second]).dropna()
         if len(spread) < MIN_OBSERVATIONS + 1:
             continue

@@ -58,6 +58,48 @@ def _report(frame, title):
                   f"(n={len(extreme)})")
 
 
+# Calendar-day windows around an auction date. Calendar rather than business
+# days because that is how the auction date itself is published.
+AUCTION_WINDOWS = [(-10, -6, "10-6 days before"), (-5, -1, "5-1 days before"),
+                   (0, 0, "auction day"), (1, 7, "1-7 days after"),
+                   (8, 14, "8-14 days after"), (15, 30, "15-30 days after")]
+
+
+def auction_cycle(conn) -> None:
+    """Where in the auction cycle a bond sits cheap to its own norm.
+
+    The textbook expectation is a pre-auction concession: the market cheapens
+    the bond going in, to make room for the new supply. Measured here it is
+    the other way round, which is why `signals/liquidity.py` marks the days
+    AFTER a sale rather than the days before.
+
+    `dislocation_bp` is the bond's residual minus its own trailing mean, so a
+    positive average means "cheaper than this bond normally is" — the same
+    quantity the reports show in the `gap` column.
+    """
+    events = pd.read_sql_query(
+        "SELECT DISTINCT auction_date, isin FROM auctions WHERE kind = 'auction'", conn)
+    signals = pd.read_sql_query(
+        "SELECT obs_date, isin, dislocation_bp FROM bond_signals", conn)
+    if events.empty or signals.empty:
+        return
+    events["auction_date"] = pd.to_datetime(events["auction_date"])
+    signals["obs_date"] = pd.to_datetime(signals["obs_date"])
+
+    merged = signals.merge(events, on="isin")
+    merged["offset"] = (merged["obs_date"] - merged["auction_date"]).dt.days
+    print(f"\nAUCTION CYCLE: gap to the bond's own norm (bp), by day relative to "
+          f"its auction\n  {len(events)} bond-auctions on "
+          f"{events['auction_date'].nunique()} auction dates")
+    print(f"  {'window':<20}{'mean gap':>10}{'n':>8}")
+    for low, high, label in AUCTION_WINDOWS:
+        subset = merged[merged["offset"].between(low, high)]
+        if subset.empty:
+            continue
+        print(f"  {label:<20}{subset['dislocation_bp'].mean():>+10.1f}{len(subset):>8}")
+    print("  (positive = cheaper than this bond's own recent norm)")
+
+
 def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     conn = db.connect()
@@ -82,6 +124,8 @@ def main() -> None:
               f"{switches['pair'].nunique()} candidate switch pairs")
         _report(_forward_changes(switches, "pair", "spread_bp"),
                 "SWITCH PAIRS: mean change in the pair spread (bp) after the signal")
+
+    auction_cycle(conn)
 
     print("\nOne 9-month sample, one regime, in-sample throughout: evidence that the "
           "residuals mean-revert,\nnot a forecast of what a strategy would earn. "

@@ -322,3 +322,64 @@ one bond matches the maturity; the curve decides step-coupon status from the
 series label rather than from free-text `notes`; and a repair on connect
 clears a step-coupon note from a bond whose own label carries a single
 coupon, which COALESCE could never do on its own.
+
+## Which bonds are actually traded
+
+The quote sheet prices 44-46 bonds every business day, but that is not the
+same as 44-46 bonds being dealable. Two published series say which are:
+
+* **Outright Transactions Volumes** and the **Trade Summary** give turnover,
+  trade count and — most usefully — how MANY DAYS a bond traded at all. Over
+  a 60-day window the market splits sharply: a handful of bonds trade on 20
+  to 30 days, and the long tail trades on 1 to 5.
+* **Auction announcements and results** say which bonds the PDMO is issuing
+  now. A bond auctioned in the last few months is the on-the-run paper the
+  dealers make real prices in.
+
+Neither alone is enough. Turnover alone promotes a bond that traded once in
+size; benchmark status alone promotes paper that was announced and then
+barely traded. The tiering in `signals/liquidity.py` requires both for the
+core book (auctioned within 120 days AND traded on >= 8 of the last 60), and
+turnover alone for the "active" tier (>= 10 of the last 60).
+
+On 2026-09-02 that gives 9 core, 11 active and 22 wider, and the core book
+is exactly the paper the auction announcements name — 11.70%2034A (Rs 80.6bn
+over 60 days), 11.00%2030B, 10.00%2030A, 10.75%2037A, 10.85%2036A,
+11.20%2033, 11.50%2032A, 11.00%2030A and 10.75%2034A, with 11.60%2031A
+trading but too new to score.
+
+**The benchmark floor cannot be waived.** It was first set at 3 days, on the
+reasoning that a freshly auctioned bond's printed trade record lags its real
+dealability. That let 11.50%2035A into the core book on 6 trading days, and
+it is not a bond anyone is dealing in size. Eight days is the floor now: low
+enough that genuinely new paper still clears it within a fortnight of its
+auction, high enough that an announced-but-untraded bond does not.
+
+## The auction cycle
+
+`python -m signals.validate` measures where in its issuance cycle a bond
+sits cheap to its OWN norm (`dislocation_bp`, the same quantity the reports
+show as `gap`). Over the 44 bond-auctions on 15 auction dates in this data:
+
+    10-6 days before      +0.3bp     n=99
+    5-1 days before       +0.7bp     n=75
+    auction day           +0.7bp     n=25
+    1-7 days after        +6.0bp    n=122
+    8-14 days after       +5.7bp    n=142
+    15-30 days after      +2.8bp    n=335
+
+This is the OPPOSITE of the textbook pre-auction concession, in which the
+market is supposed to cheapen a bond going in to make room for the supply.
+Here nothing happens before and the cheapening arrives after, persisting for
+about a fortnight while the new paper is distributed, then decaying.
+
+A plausible reading is that the PDMO's auction sizes are known and modest
+relative to the book, so there is nothing to concede in advance, while
+dealers who took down the new supply then carry it and quote it cheap until
+it clears. That is a story, not a finding; what the data supports is the
+shape of the curve above.
+
+Treat it as context rather than a signal: 44 events is few, the sample is
+one 9-month regime, and 6bp is well inside a typical 16bp bid-offer. Its
+practical use is judging a reading — a benchmark showing +5bp cheap a week
+after its auction is closer to normal than the number alone suggests.

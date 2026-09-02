@@ -12,10 +12,12 @@ from signals import run as signal_run
 
 @pytest.fixture
 def seeded(tmp_path):
-    """A small but complete database: bonds, quotes, trades, curve, signals.
+    """A small but complete database: bonds, quotes, trades, auctions, signals.
 
     The trades matter: the dashboard only lists bonds that actually trade,
-    so a fixture without them renders (correctly) empty.
+    so a fixture without them renders (correctly) empty. So do the auctions:
+    the core book is "benchmark AND trading", and switch candidates need two
+    core legs, so a fixture with no auctions has an empty core book.
     """
     conn = db.connect(tmp_path / "dash.sqlite")
     bonds = [("LKB00527I150", 2.0, "2027-09-15", "10.00%2027A"),
@@ -45,6 +47,12 @@ def seeded(tmp_path):
                    n_quotes, rmse_bp, n_trades, trade_rmse_bp, trade_bias_bp, fitted_at)
                VALUES (?, 12.0, -3.0, 1.0, 2.822, 4, 9.5, ?, 20.0, ?, '2026-01-01')""",
             (day, 2 if index % 2 else 0, 15.0 if index % 2 else None))
+    # Two of the four are current auction benchmarks, which is what puts them
+    # in the core book. They sit 7 years apart, so the pair only becomes a
+    # switch candidate under the rule that any two auctioned bonds pair.
+    for isin in ("LKB00428B156", "LKB01136H151"):
+        db.upsert_auction(conn, "2026-01-20", isin, "auction", "2026-01-22",
+                          11.0, 1_000_000_000, 2_500_000_000, 1_000_000_000, "t")
     conn.commit()
     signal_run.rebuild(conn)
     return conn
@@ -121,3 +129,40 @@ def test_rows_survive_a_missing_spread(seeded):
     assert rows.count("<tr>") == rows.count("</tr>") >= 1
     assert "–" in rows                       # placeholder for the unknown b/o
     assert rows.count("<td>") >= 4 * rows.count("<tr>")  # every cell present
+
+
+def test_core_book_leads_with_the_benchmarks_that_trade(seeded):
+    """The page's whole point: what you can actually deal in, first."""
+    data = build.gather(seeded)
+    assert {row["isin"] for row in data["core"]} == {"LKB00428B156", "LKB01136H151"}
+    assert all(row["isin"] not in data["core_isins"] for row in data["others"])
+    page = build.render(data)
+    assert "Core book" in page
+    # The auction facts a decision needs are on the row, not just implied.
+    assert "cover" in page and "auction" in page
+    assert "2.5×" in page                      # bid-to-cover of the last auction
+
+
+def test_switch_candidates_need_two_core_legs(seeded):
+    """A pair is only a trade if you can deal in BOTH sides."""
+    data = build.gather(seeded)
+    assert data["switches"]                    # the fixture has a core pair
+    for row in data["switches"]:
+        assert {row["isin_a"], row["isin_b"]} <= data["core_isins"]
+
+
+def test_a_bond_is_never_both_cheap_and_rich(seeded):
+    """Slicing N rows off each end of a shorter list overlapped in the middle
+    and printed the same bond under both headings."""
+    data = build.gather(seeded)
+    signals = data["signals"]
+    assert len(signals) < 2 * 6                # short enough to have overlapped
+    cheap = build._signal_rows(signals, data["spreads"], cheap=True)
+    rich = build._signal_rows(signals, data["spreads"], cheap=False)
+    for row in signals:
+        label = row["series_label"]
+        assert not (label in cheap and label in rich), label
+    # And every row is on the side its heading claims.
+    for row in signals:
+        side = cheap if row["zscore"] >= 0 else rich
+        assert row["series_label"] in side
