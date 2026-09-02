@@ -290,7 +290,9 @@ def _switch_rows(switches, spreads) -> str:
     return "".join(out)
 
 
-def render(data) -> str:
+def render(data, fragment: bool = False) -> str:
+    """The page. `fragment` omits the document wrapper for hosts that supply
+    their own <html>/<head>/<body> (an Artifact publish does)."""
     fit, coverage = data["fit"], data["coverage"]
     checked = data["last_checked"]
     if fit["trade_bias_bp"] is not None:
@@ -316,17 +318,12 @@ def render(data) -> str:
               f'bid-offer wider than {MAX_TRADEABLE_SPREAD_BP:.0f}bp, not a dealable '
               f'price.</p>' if data["hidden"] else "")
 
-    head = ("<th>series</th><th>gap bp</th><th>z</th><th>b/o</th><th></th>")
+    head = "<th>series</th><th>gap bp</th><th>z</th><th>b/o</th><th></th>"
     has_trades = any(r["source"] == "trade" for r in data["residuals"])
     trade_key = ('<span><i style="background:var(--series-2)"></i>executed trades, '
                  'held out of the fit</span>' if has_trades else
                  '<span class="muted-key">no executed trades published for this day yet</span>')
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LKR bond relative value — {data["obs_date"]}</title>
-<style>{STYLE}</style></head><body>
-<div id="tip"></div>
+    body = f"""<div id="tip"></div>
 <div class="wrap">
   <h1>LKR government bond relative value</h1>
   <p class="sub">{data["obs_date"]} · rebuilt automatically each day from
@@ -376,14 +373,25 @@ def render(data) -> str:
      <code>python -m signals.validate</code> for the current numbers. One
      9-month sample in one regime — evidence the mechanism works, not a
      forecast of what it pays.</p>
-</div>
-<script>{SCRIPT}</script>
-</body></html>"""
+</div>"""
+
+    title = "LKR Bond Relative Value"
+    if fragment:
+        return (f"<title>{title}</title>\n<style>{STYLE}</style>\n"
+                f"{body}\n<script>{SCRIPT}</script>")
+    return (f"<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
+            f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            f"<title>{title} — {data['obs_date']}</title>\n"
+            f"<style>{STYLE}</style></head><body>\n{body}\n"
+            f"<script>{SCRIPT}</script>\n</body></html>")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default=str(OUTPUT), help="where to write the page")
+    parser.add_argument("--fragment", action="store_true",
+                        help="omit the <html>/<head>/<body> wrapper, for hosts "
+                             "that supply their own document shell")
     args = parser.parse_args()
 
     data = gather(db.connect())
@@ -391,7 +399,7 @@ def main() -> None:
         raise SystemExit("no fitted curves yet — run: python -m curves.fit")
     path = Path(args.out)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render(data), encoding="utf-8")
+    path.write_text(render(data, fragment=args.fragment), encoding="utf-8")
     print(f"dashboard written to {path} ({path.stat().st_size // 1024}kB, "
           f"{data['obs_date']})")
 
