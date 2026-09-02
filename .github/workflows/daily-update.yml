@@ -2,8 +2,8 @@
 #
 # Every day this fetches whatever the PDMO has published since the last run,
 # parses it into data/sgcp.sqlite, fits that day's yield curve, recomputes the
-# relative-value signals, refreshes the charts, and commits the result back to
-# this repository. A day with nothing new (weekend, public holiday) simply
+# relative-value signals, refreshes the charts and the dashboard page, and
+# commits the result back to this repository. A day with nothing new (weekend, public holiday) simply
 # makes no commit. Today's signals are printed into the run log, so the
 # Actions page doubles as a daily readout.
 #
@@ -66,11 +66,14 @@ jobs:
       - name: Print today's signals into the run log
         run: python -m signals.report
 
+      - name: Rebuild the dashboard page
+        run: python -m dashboard.build
+
       - name: Commit the refreshed data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/sgcp.sqlite data/reports
+          git add data/sgcp.sqlite data/reports docs/index.html
           # --quiet exits non-zero when there IS something staged, so this
           # commits on change and stays silent on a no-news day.
           git diff --cached --quiet && echo "nothing new today" && exit 0
