@@ -18,6 +18,7 @@ Three report families are ingested (details and quirks in
 | Outright Transactions Volumes | legacy Excel `.xls` | per-ISIN outright traded volume, Rs. mn |
 | Secondary Market Trade Summary | PDF | per-ISIN executed trades: OHLC + wavg yield, volume, trade count |
 | Treasury Bond Auction press releases | PDF | auction ISIN, series label, weighted average yield, amounts offered/bid/accepted |
+| Treasury Bond issuance announcements | PDF | ISIN, series label, **date of issue, coupon payment dates, accrued interest**, amount offered — and which bonds are currently being auctioned |
 
 The archive reaches back to **1 Dec 2025** (the site publishes nothing older
 under these sections). A full backfill on 2026-08-31 ingested **542 files**
@@ -27,9 +28,12 @@ executed-trade rows spanning 2025-12-01 to 2026-08-31.
 ### One known gap
 
 The quote sheet identifies bonds only by a series label ("10.00%2030A"),
-never by ISIN. Auction press releases print that label beside its ISIN, so
-quotes are resolved by label where an auction covers the bond and by
-maturity date otherwise — about 45 of the ~92 daily quote rows resolve.
+never by ISIN. The auction documents print that label beside its ISIN, so
+quotes are resolved by label where one covers the bond and by maturity date
+otherwise. The series letter is not printed consistently between sources —
+an announcement said "11.20%2033" for the bond the quote sheet calls
+"11.20%2033A" — so a letter-insensitive match is tried before falling back
+to maturity, used only where it resolves to exactly one bond.
 
 The rest cannot be identified from any published source. Their ISINs cannot
 be synthesised either: the quote sheet's tenor column agrees with the tenor
@@ -227,6 +231,27 @@ Switch candidates apply the same idea to a pair of bonds maturing within
 two years of each other: the spread between their residuals, z-scored
 against its own history. Positive means the first leg has become unusually
 cheap against the second.
+
+### Only tradeable bonds are listed
+
+Ranking on z-score alone **selects for the wrong bonds**, and this was a real
+defect until it was measured. An illiquid bond is quoted from stale marks
+that jump when they are finally refreshed, so its residual moves in steps
+and its z-score is large; a liquid benchmark is quoted continuously and
+barely moves, so it never reaches the top. Before the fix the cheap list was
+headed by bonds that had traded on 1 to 5 of the previous 60 days, while the
+single most-traded bond in the market — Rs 80bn over 60 days — did not appear
+at all.
+
+So a bond is only listed when it has actually been trading: at least 10 of
+the last 60 days, or 3 for a current auction benchmark, whose printed trade
+record lags its real dealability. Every row shows turnover and days traded,
+and benchmarks are marked, so the size of the opportunity can be judged
+against how much of it is real.
+
+Liquid bonds that do not yet have 30 days of residual history — which is
+exactly what a freshly auctioned benchmark looks like — are listed
+separately as "building history" rather than silently dropped.
 
 ### Does it work?
 

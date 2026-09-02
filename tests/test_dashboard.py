@@ -12,7 +12,11 @@ from signals import run as signal_run
 
 @pytest.fixture
 def seeded(tmp_path):
-    """A small but complete database: bonds, quotes, a curve, and signals."""
+    """A small but complete database: bonds, quotes, trades, curve, signals.
+
+    The trades matter: the dashboard only lists bonds that actually trade,
+    so a fixture without them renders (correctly) empty.
+    """
     conn = db.connect(tmp_path / "dash.sqlite")
     bonds = [("LKB00527I150", 2.0, "2027-09-15", "10.00%2027A"),
              ("LKB00428B156", 3.0, "2028-02-15", "11.00%2028A"),
@@ -33,6 +37,9 @@ def seeded(tmp_path):
                 # variance — identical noise would give every pair sd 0.
                 (day, isin, tau,
                  (position * 3.0) + ((index * (position + 2)) % 7) * 1.5))
+            # Real trading, so the liquidity filter lets these bonds through.
+            db.upsert_trade_summary(conn, day, isin, "TBond", None, None, None,
+                                    None, 10.0 + position, 2_000_000_000, 4, "t")
         conn.execute(
             """INSERT INTO curve_fits (obs_date, beta0, beta1, beta2, lambda_years,
                    n_quotes, rmse_bp, n_trades, trade_rmse_bp, trade_bias_bp, fitted_at)

@@ -177,6 +177,42 @@ def parse_auction_index(html: bytes | str) -> list[IndexEntry]:
     return entries
 
 
+def parse_issuance_index(html: bytes | str) -> list[IndexEntry]:
+    """One year's bond-issuance page -> the English announcements.
+
+    Each announcement is posted in three languages, and here the anchor text
+    IS the language ("English", "සිංහල", "தமிழ்") with the date living in the
+    surrounding row, so the row is what carries the date.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    body = soup.select_one(".page-template--body__content") or soup
+    entries: list[IndexEntry] = []
+    seen: set[str] = set()
+    for anchor in body.find_all("a", href=True):
+        href = anchor["href"]
+        if "/api/file/" not in href:
+            continue
+        if href.startswith("/"):
+            href = "https://www.treasury.gov.lk" + href
+        if href in seen or "english" not in dates.collapse_ws(
+                anchor.get_text(" ", strip=True)).lower():
+            continue
+        seen.add(href)
+        context = ""
+        node = anchor
+        for _ in range(4):
+            if node.parent is None:
+                break
+            node = node.parent
+            context = dates.collapse_ws(node.get_text(" ", strip=True))[:200]
+            if dates.parse_spelled(context) or dates.parse_dmy(context):
+                break
+        entries.append(IndexEntry(href, "bond_issuance",
+                                  dates.parse_spelled(context) or dates.parse_dmy(context),
+                                  None))
+    return entries
+
+
 def file_uuid(url: str) -> str:
     """The /api/file/<uuid> tail — used as the cache filename and raw_ref."""
     return url.rstrip("/").rsplit("/", maxsplit=1)[-1]

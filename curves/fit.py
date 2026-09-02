@@ -65,13 +65,16 @@ def load_day(conn, obs_date: str):
 
     for row in conn.execute(
             """SELECT o.isin, o.mid_yield, o.bid_yield, o.offer_yield,
-                      b.maturity_date, b.series_label, b.notes
+                      b.maturity_date, b.series_label
                  FROM observations o JOIN bonds b USING(isin)
                 WHERE o.obs_date = ? AND o.source = 'pdmo_daily'
                   AND o.mid_yield IS NOT NULL AND b.maturity_date IS NOT NULL""",
             (obs_date,)):
-        # Step-coupon bonds chain several rates in their label.
-        if len(series.coupon_steps(row["series_label"])) > 1 or row["notes"]:
+        # Step-coupon bonds chain several rates in their label. This is
+        # decided from the label alone: `notes` is free-text provenance and
+        # was never a reliable flag — a stale value there silently excluded
+        # two liquid bonds from every curve.
+        if len(series.coupon_steps(row["series_label"])) > 1:
             continue
         tau = _years(day, dt.date.fromisoformat(row["maturity_date"]))
         if tau < MIN_TAU_YEARS:
@@ -83,12 +86,12 @@ def load_day(conn, obs_date: str):
                        "yield": row["mid_yield"], "spread_bp": spread})
 
     for row in conn.execute(
-            """SELECT t.isin, t.wavg_yield, b.maturity_date, b.series_label, b.notes
+            """SELECT t.isin, t.wavg_yield, b.maturity_date, b.series_label
                  FROM trade_summary t JOIN bonds b USING(isin)
                 WHERE t.obs_date = ? AND t.security_type = 'TBond'
                   AND t.wavg_yield IS NOT NULL AND b.maturity_date IS NOT NULL""",
             (obs_date,)):
-        if len(series.coupon_steps(row["series_label"])) > 1 or row["notes"]:
+        if len(series.coupon_steps(row["series_label"])) > 1:
             continue
         tau = _years(day, dt.date.fromisoformat(row["maturity_date"]))
         if tau < MIN_TAU_YEARS:

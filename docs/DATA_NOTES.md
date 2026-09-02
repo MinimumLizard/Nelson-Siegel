@@ -270,3 +270,55 @@ quote sheet's tenor column against the tenor encoded in the ISIN, for the
 44 bonds where both are known: 33 agree, 8 are off by +1, 2 by -1, 1 by +2.
 A quarter of synthesised ISINs would therefore be wrong, and a wrong ISIN
 silently merges two bonds' histories — far worse than a missing row.
+
+## Auction announcements (PDF) — the best reference source
+
+Published ahead of each auction at `/web/treasury-bonds-issuances`, in three
+languages; only the English one is parsed. The table is the tidy one of the
+three auction-document shapes: field names in the left column, one column
+per bond, nothing wrapped.
+
+It is the only source for three things:
+
+* **date of issue** and **coupon payment dates** ("01 February & 01 August",
+  normalised to `02-01,08-01`);
+* **accrued interest at settlement**, which cross-checks cleanly — the
+  10.00%2030A announcement gives Rs 0.8424 per 100, exactly
+  `5.00 × 31/184`, i.e. actual/actual on a semi-annual coupon, 31 days from
+  the 01 August coupon to the 01 September settlement;
+* **which bonds are currently being auctioned**, which is what "on the run"
+  means in practice and is how the signals stage knows where the depth is.
+
+## Two ways the quote-to-ISIN join was wrong
+
+Both were found by asking why the most-traded bonds were missing from the
+signal list, and both are now covered by tests.
+
+**The series letter is not printed consistently.** An announcement calls a
+bond "11.20%2033"; the daily quote sheet calls the same bond "11.20%2033A"
+(same maturity, same coupon). An exact label match misses. A
+letter-insensitive match is therefore tried next, and only accepted where
+it resolves to exactly one bond.
+
+**Maturity alone was enough to attribute a quote — and it should never have
+been.** Four maturities in the current quote sheet carry two different
+series each:
+
+    2029-07-15   20.00%2029A          and 1.00%2029A
+    2031-05-15   18.00%2031A          and 12.40%7.50%5.00%2031A
+    2033-01-15   11.20%2033A          and 12.40%7.50%5.00%2033A
+    2035-03-15   11.50%2035A          and 12.40%7.50%5.00%2035A
+
+Where only ONE of the pair was known to the database, the old rule returned
+it for BOTH quotes, so a step-coupon bond's prices were written to an
+ordinary bond's ISIN — two bonds' histories silently merged into one. It
+also stamped that bond's `notes` with the other's step-coupon label, and
+because the curve stage treated any `notes` value as "this is a step-coupon
+bond, exclude it", two liquid benchmarks (11.20%2033A and 11.50%2035A) were
+dropped from **every** curve despite having 183 days of quotes each.
+
+Three changes: the coupon must agree wherever both are known, even when only
+one bond matches the maturity; the curve decides step-coupon status from the
+series label rather than from free-text `notes`; and a repair on connect
+clears a step-coupon note from a bond whose own label carries a single
+coupon, which COALESCE could never do on its own.
