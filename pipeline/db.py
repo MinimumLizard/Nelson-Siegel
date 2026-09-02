@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS bonds (
     maturity_date   TEXT,      -- ISO date
     tenor_years     INTEGER,   -- original tenor encoded in the ISIN
     series_label    TEXT,      -- canonical "10.00%2030A"; joins quotes to ISINs
+    issue_date      TEXT,      -- from the auction announcement
+    coupon_dates    TEXT,      -- "02-01,08-01": the two coupon month-days
     first_seen_date TEXT,      -- first obs_date this bond appeared on
     notes           TEXT
 );
@@ -44,7 +46,8 @@ CREATE TABLE IF NOT EXISTS bonds (
 CREATE TABLE IF NOT EXISTS auctions (
     auction_date    TEXT NOT NULL,
     isin            TEXT NOT NULL,
-    kind            TEXT,      -- 'auction' (competitive) | 'issuance' (window)
+    kind            TEXT,      -- 'announced' | 'auction' | 'issuance'
+    accrued_per_100 REAL,      -- accrued interest at settlement (announcements)
     settlement_date TEXT,
     way_pct         REAL,      -- weighted average yield accepted, percent
     offered_lkr     INTEGER,
@@ -216,6 +219,8 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.executescript(INDEXES)
+    _repair(conn)
+    conn.commit()
     return conn
 
 
@@ -224,8 +229,30 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 # instead; the pipeline is expected to run against a database that has been
 # accumulating data since before they existed.
 ADDED_COLUMNS = {
-    "bonds": {"series_label": "TEXT"},
+    "bonds": {"series_label": "TEXT", "issue_date": "TEXT", "coupon_dates": "TEXT"},
+    "auctions": {"accrued_per_100": "REAL"},
 }
+
+
+def _repair(conn) -> None:
+    """Clear `notes` that contradicts the bond's own series label.
+
+    `notes` records the printed step-coupon label ("12%9%2027A"). Before the
+    quote-to-ISIN join required the coupon to agree, a step-coupon bond's
+    quotes could be attributed to an ordinary bond maturing the same day,
+    stamping that bond with a step label. COALESCE in upsert_bond means a
+    re-parse can never clear it, so it is cleared here. Idempotent.
+    """
+    from pipeline import series  # local: keeps the import graph one-way
+
+    for row in conn.execute(
+            "SELECT isin, series_label, notes FROM bonds WHERE notes IS NOT NULL"):
+        # A step-coupon note on a bond whose own label has a single coupon
+        # is the contradiction: the note came from another bond's quote.
+        note_is_stepped = len(series.coupon_steps(row["notes"])) > 1
+        bond_is_stepped = len(series.coupon_steps(row["series_label"])) > 1
+        if note_is_stepped and not bond_is_stepped:
+            conn.execute("UPDATE bonds SET notes = NULL WHERE isin = ?", (row["isin"],))
 
 
 def _migrate(conn) -> None:
@@ -239,7 +266,7 @@ def _migrate(conn) -> None:
 
 
 def upsert_bond(conn, isin, coupon_pct, maturity_date, tenor_years, first_seen_date,
-                notes=None, series_label=None):
+                notes=None, series_label=None, issue_date=None, coupon_dates=None):
     """Insert a bond, or fill in blanks on an existing row.
 
     COALESCE(old, new) keeps an already-known coupon if a later file
@@ -249,17 +276,21 @@ def upsert_bond(conn, isin, coupon_pct, maturity_date, tenor_years, first_seen_d
     """
     conn.execute(
         """INSERT INTO bonds (isin, coupon_pct, maturity_date, tenor_years,
-                              first_seen_date, notes, series_label)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+                              first_seen_date, notes, series_label,
+                              issue_date, coupon_dates)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(isin) DO UPDATE SET
                coupon_pct      = COALESCE(bonds.coupon_pct, excluded.coupon_pct),
                maturity_date   = COALESCE(bonds.maturity_date, excluded.maturity_date),
                tenor_years     = COALESCE(bonds.tenor_years, excluded.tenor_years),
                notes           = COALESCE(bonds.notes, excluded.notes),
                series_label    = COALESCE(bonds.series_label, excluded.series_label),
+               issue_date      = COALESCE(bonds.issue_date, excluded.issue_date),
+               coupon_dates    = COALESCE(bonds.coupon_dates, excluded.coupon_dates),
                first_seen_date = MIN(COALESCE(bonds.first_seen_date, excluded.first_seen_date),
                                      COALESCE(excluded.first_seen_date, bonds.first_seen_date))""",
-        (isin, coupon_pct, maturity_date, tenor_years, first_seen_date, notes, series_label),
+        (isin, coupon_pct, maturity_date, tenor_years, first_seen_date, notes,
+         series_label, issue_date, coupon_dates),
     )
 
 
@@ -361,21 +392,23 @@ def clear_trade_summary(conn, raw_ref):
 
 
 def upsert_auction(conn, auction_date, isin, kind, settlement_date, way_pct,
-                   offered_lkr, bids_lkr, accepted_lkr, raw_ref):
+                   offered_lkr, bids_lkr, accepted_lkr, raw_ref, accrued_per_100=None):
     """One bond's result from one auction (replace on re-parse)."""
     conn.execute(
         """INSERT INTO auctions (auction_date, isin, kind, settlement_date, way_pct,
-                                 offered_lkr, bids_lkr, accepted_lkr, raw_ref)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 offered_lkr, bids_lkr, accepted_lkr, raw_ref,
+                                 accrued_per_100)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(auction_date, isin, kind) DO UPDATE SET
                settlement_date = excluded.settlement_date,
                way_pct         = excluded.way_pct,
                offered_lkr     = excluded.offered_lkr,
                bids_lkr        = excluded.bids_lkr,
                accepted_lkr    = excluded.accepted_lkr,
+               accrued_per_100 = excluded.accrued_per_100,
                raw_ref         = excluded.raw_ref""",
         (auction_date, isin, kind, settlement_date, way_pct,
-         offered_lkr, bids_lkr, accepted_lkr, raw_ref))
+         offered_lkr, bids_lkr, accepted_lkr, raw_ref, accrued_per_100))
 
 
 def upsert_auction_observation(conn, obs_date, isin, way_pct, volume_lkr, raw_ref):

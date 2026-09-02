@@ -16,6 +16,7 @@ from pathlib import Path
 from curves import nelson_siegel as ns
 from dashboard import palette
 from pipeline import config, db
+from signals import liquidity
 from signals.report import MAX_TRADEABLE_SPREAD_BP, _expected_capture
 
 OUTPUT = Path("docs/index.html")
@@ -42,8 +43,12 @@ def gather(conn) -> dict | None:
                        WHERE obs_date=? AND source='pdmo_daily'
                          AND bid_yield IS NOT NULL AND offer_yield IS NOT NULL""",
                    (obs_date,))}
+    # Liquidity decides who appears at all: ranking on z-score alone selects
+    # for illiquid bonds, whose stale quotes jump and so score highest.
+    facts = liquidity.profile(conn, obs_date)
     tradeable = {isin for isin, spread in spreads.items()
-                 if spread <= MAX_TRADEABLE_SPREAD_BP}
+                 if spread <= MAX_TRADEABLE_SPREAD_BP
+                 and liquidity.is_tradeable(facts.get(isin))}
 
     signals = [dict(r) for r in conn.execute(
         """SELECT s.*, b.series_label, b.maturity_date FROM bond_signals s
@@ -69,6 +74,7 @@ def gather(conn) -> dict | None:
     return {
         "obs_date": obs_date, "fit": fit, "residuals": residuals,
         "spreads": spreads, "signals": signals, "switches": switches,
+        "liquidity": facts,
         "coverage": dict(coverage),
         "last_checked": dict(last_checked) if last_checked else None,
         "hidden": len(spreads) - len(tradeable),
@@ -212,7 +218,8 @@ h2 { font-size: 15px; margin: 32px 0 10px; }
 @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px;
-     padding: 0 0 6px 14px; border-bottom: 1px solid var(--border); }
+     padding: 0 0 6px 14px; border-bottom: 1px solid var(--border);
+     white-space: nowrap; }
 th:first-child { padding-left: 0; }
 th:first-child, td:first-child { text-align: left; }
 td { padding: 7px 0 7px 14px; border-bottom: 1px solid var(--border); text-align: right; }
@@ -223,6 +230,9 @@ tr:last-child td { border-bottom: none; }
 .bar span { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
 .cheap span { background: var(--cheap); left: 50%; }
 .rich span { background: var(--rich); right: 50%; }
+.bench { font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+         color: var(--series-1); border: 1px solid var(--series-1);
+         border-radius: 4px; padding: 0 4px; margin-left: 6px; }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
          color: var(--ink-2); white-space: nowrap; }
 .badge i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -249,7 +259,7 @@ for (const mark of document.querySelectorAll('[data-tip]')) {
 """
 
 
-def _signal_rows(signals, spreads, cheap: bool, limit=6) -> str:
+def _signal_rows(signals, spreads, cheap: bool, limit=6, facts=None) -> str:
     rows = signals[:limit] if cheap else list(reversed(signals[-limit:]))
     widest = max((abs(r["dislocation_bp"]) for r in signals), default=1.0) or 1.0
     cells = []
@@ -259,11 +269,17 @@ def _signal_rows(signals, spreads, cheap: bool, limit=6) -> str:
         side = "cheap" if gap >= 0 else "rich"
         spread = spreads.get(row["isin"])
         spread_cell = f"{spread:.0f}" if spread is not None else "–"
+        fact = (facts or {}).get(row["isin"], {})
+        name = html.escape(row["series_label"] or row["isin"])
+        if fact.get("is_benchmark"):
+            name += ('<span class="bench" title="named in a recent auction '
+                     'announcement">bmk</span>')
+        turnover = f'{fact.get("turnover_lkr", 0) / 1e9:.0f}' if fact else "–"
         cells.append(
-            f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td>'
+            f'<tr><td>{name}</td>'
             f'<td>{gap:+.1f}</td><td>{row["zscore"]:.1f}</td>'
-            f'<td>{spread_cell}</td>'
-            f'<td style="width:38%"><div class="bar {side}">'
+            f'<td>{spread_cell}</td><td>{turnover}</td>'
+            f'<td style="width:30%"><div class="bar {side}">'
             f'<span style="width:{share:.1f}%"></span></div></td></tr>')
     return "".join(cells)
 
@@ -314,11 +330,15 @@ def render(data, fragment: bool = False) -> str:
         f'<div class="value">{value}</div><div class="note">{note}</div></div>'
         for label, value, note in tiles)
 
-    hidden = (f'<p class="foot">{data["hidden"]} bond(s) hidden from the tables: '
-              f'bid-offer wider than {MAX_TRADEABLE_SPREAD_BP:.0f}bp, not a dealable '
-              f'price.</p>' if data["hidden"] else "")
+    hidden = (f'<p class="foot">{data["hidden"]} quoted bond(s) hidden: too wide to '
+              f'deal on, or traded on fewer than {liquidity.MIN_DAYS_TRADED} of the '
+              f'last {liquidity.WINDOW_DAYS} days. Ranking on z-score alone surfaces '
+              f'exactly these — an illiquid bond is quoted from stale marks that jump '
+              f'when refreshed, so its score is largest precisely where it is least '
+              f'tradeable.</p>' if data["hidden"] else "")
 
-    head = "<th>series</th><th>gap bp</th><th>z</th><th>b/o</th><th></th>"
+    head = ('<th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
+            '<th title="turnover over the last 60 days">Rs bn</th><th></th>')
     has_trades = any(r["source"] == "trade" for r in data["residuals"])
     trade_key = ('<span><i style="background:var(--series-2)"></i>executed trades, '
                  'held out of the fit</span>' if has_trades else
@@ -344,12 +364,14 @@ def render(data, fragment: bool = False) -> str:
     <div>
       <h2>Cheap — yields above its own norm</h2>
       <div class="card"><table><thead><tr>{head}</tr></thead>
-        <tbody>{_signal_rows(data["signals"], data["spreads"], cheap=True)}</tbody></table></div>
+        <tbody>{_signal_rows(data["signals"], data["spreads"], cheap=True,
+                             facts=data["liquidity"])}</tbody></table></div>
     </div>
     <div>
       <h2>Rich — yields below its own norm</h2>
       <div class="card"><table><thead><tr>{head}</tr></thead>
-        <tbody>{_signal_rows(data["signals"], data["spreads"], cheap=False)}</tbody></table></div>
+        <tbody>{_signal_rows(data["signals"], data["spreads"], cheap=False,
+                             facts=data["liquidity"])}</tbody></table></div>
     </div>
   </div>
   {hidden}

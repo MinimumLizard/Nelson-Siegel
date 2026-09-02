@@ -107,3 +107,90 @@ def test_rebuild_is_idempotent(tmp_path):
     assert first == second
     stored = conn.execute("SELECT COUNT(*) c FROM bond_signals").fetchone()["c"]
     assert stored == first["bond_signals"]
+
+
+# ---------------------------------------------------------------------------
+# Liquidity — which bonds are worth reporting a dislocation in at all
+# ---------------------------------------------------------------------------
+
+def _seed_liquidity(conn, isin, days, per_day_lkr=1_000_000_000, end="2026-09-01"):
+    day = pd.Timestamp(end)
+    for index in range(days):
+        stamp = (day - pd.tseries.offsets.BDay(index)).date().isoformat()
+        db.upsert_trade_summary(conn, stamp, isin, "TBond", None, None, None,
+                                None, 11.0, per_day_lkr, 2, "t")
+
+
+def test_illiquid_bond_is_not_tradeable(tmp_path):
+    """The core fix: a bond that barely trades must not head the list, however
+    large its z-score. Stale quotes jump when refreshed, so illiquid bonds
+    score HIGHEST precisely where they are least dealable."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    _seed_liquidity(conn, "LKB00934F154", days=1)     # traded once
+    _seed_liquidity(conn, "LKB01237G019", days=25)    # genuinely liquid
+    conn.commit()
+
+    facts = liquidity.profile(conn, "2026-09-01")
+    assert not liquidity.is_tradeable(facts.get("LKB00934F154"))
+    assert liquidity.is_tradeable(facts.get("LKB01237G019"))
+
+
+def test_benchmark_clears_a_lower_bar_but_not_a_waiver(tmp_path):
+    """Freshly auctioned paper is dealable before its trade record catches
+    up — but a benchmark that never trades is still not tradeable."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    _seed_liquidity(conn, "LKB00531B017", days=4)     # thin, but auctioned
+    conn.commit()
+    for isin in ("LKB00531B017", "LKB01136H151"):     # the second never trades
+        db.upsert_auction(conn, "2026-07-30", isin, "announced", "2026-08-03",
+                          None, 1_000_000_000, None, None, "t")
+    conn.commit()
+
+    facts = liquidity.profile(conn, "2026-09-01")
+    assert facts["LKB00531B017"]["is_benchmark"]
+    assert liquidity.is_tradeable(facts["LKB00531B017"])      # 4 days >= 3
+    assert not liquidity.is_tradeable(facts.get("LKB01136H151"))  # never traded
+
+
+def test_liquidity_window_ignores_the_future(tmp_path):
+    """Scoring a historical date must use only what was known then."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    _seed_liquidity(conn, "LKB00934F154", days=20, end="2026-09-01")
+    conn.commit()
+    early = liquidity.profile(conn, "2026-07-01")
+    assert early.get("LKB00934F154") is None or early["LKB00934F154"]["days_traded"] == 0
+
+
+def test_stale_bond_drops_out_as_the_window_moves(tmp_path):
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    _seed_liquidity(conn, "LKB00934F154", days=20, end="2026-03-01")
+    conn.commit()
+    assert liquidity.is_tradeable(liquidity.profile(conn, "2026-03-01").get("LKB00934F154"))
+    # Six months on, the same trades are outside the 60-day window.
+    assert not liquidity.is_tradeable(liquidity.profile(conn, "2026-09-01").get("LKB00934F154"))
+
+
+def test_quote_is_not_attributed_on_maturity_alone():
+    """Two series can mature on the same day — a step-coupon restructuring
+    bond and an ordinary one both mature 15 Jan 2033. Attributing one's
+    quotes to the other silently merges two bonds' price histories, so the
+    coupon has to agree even when only one bond matches the maturity."""
+    import datetime as dt
+    from pipeline import ingest
+
+    ordinary = {"isin": "LKB01533A154", "series_label": "11.20%2033",
+                "maturity_date": "2033-01-15", "coupon_pct": 11.2}
+    lookup = ({}, {}, {"2033-01-15": [ordinary]})
+
+    good = {"series_label": "11.20%2033A", "maturity_date": dt.date(2033, 1, 15),
+            "coupon_pct": 11.2}
+    assert ingest._resolve_isin(lookup, good) == ("LKB01533A154", "maturity+coupon")
+
+    # The step-coupon bond: same maturity, quite different coupon.
+    stepped = {"series_label": "12.40%7.50%5.00%2033A",
+               "maturity_date": dt.date(2033, 1, 15), "coupon_pct": 12.4}
+    assert ingest._resolve_isin(lookup, stepped) == (None, "unresolved")

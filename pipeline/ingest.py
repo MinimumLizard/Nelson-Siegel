@@ -22,6 +22,7 @@ can always be rebuilt offline with the network untouched.
 import datetime as dt
 import logging
 from dataclasses import dataclass
+from string import ascii_uppercase
 
 from pipeline import (config, db, fetch, isin, parse_auction, parse_daily,
                       parse_trade_summary, scrape_index)
@@ -49,19 +50,25 @@ def build_worklist() -> list[WorkItem]:
         entries = scrape_index.parse_trade_summary_index(html)
         log.info("trade-summary index %s: %d files", year, len(entries))
         items += [WorkItem(entry, year) for entry in entries]
+    for year, url in sorted(config.BOND_ISSUANCE_INDEX_URLS.items()):
+        html = fetch.polite_get(url).content
+        entries = scrape_index.parse_issuance_index(html)
+        log.info("bond-issuance index %s: %d English announcements", year, len(entries))
+        items += [WorkItem(entry, year) for entry in entries]
     for year, url in sorted(config.BOND_AUCTION_INDEX_URLS.items()):
         html = fetch.polite_get(url).content
         entries = scrape_index.parse_auction_index(html)
         log.info("bond-auction index %s: %d English releases", year, len(entries))
         items += [WorkItem(entry, year) for entry in entries]
 
-    # Auctions first: they are the only source naming a series label next to
-    # its ISIN, and the daily summaries (last) need those labels to resolve
-    # their quotes. Volumes and trades in between contribute further ISINs.
-    # Within a kind, oldest first, so an amended report overwrites its
-    # original rather than the other way round.
-    kind_order = {"bond_auction": 0, "volumes": 1, "trade_summary": 2,
-                  "daily_summary": 3}
+    # Announcements first, then auction results: between them they are the
+    # only sources naming a series label next to its ISIN, and the daily
+    # summaries (last) need those labels to resolve their quotes. Volumes
+    # and trade summaries in between contribute further ISINs. Within a
+    # kind, oldest first, so an amended report overwrites its original
+    # rather than the other way round.
+    kind_order = {"bond_issuance": 0, "bond_auction": 1, "volumes": 2,
+                  "trade_summary": 3, "daily_summary": 4}
     items.sort(key=lambda item: (kind_order[item.entry.kind],
                                  item.entry.posted_date or item.entry.label_date
                                  or dt.date.min))
@@ -77,17 +84,26 @@ def _cache_path(item: WorkItem):
 def _bond_lookup(conn) -> tuple[dict, dict]:
     """Indexes for resolving a quote row to a real ISIN.
 
-    Returns ({series_label: isin}, {maturity_iso: [bond rows]}) — the first
-    is exact and comes from the auction releases, the second is the older
+    Returns (exact {label: isin}, letter-insensitive {label: {isins}},
+    {maturity_iso: [bond rows]}) — the first is exact and comes from the
+    auction documents, the second covers the series letter being printed
+    inconsistently between sources, and the third is the older
     maturity-based fallback for bonds no release has covered.
     """
     by_label: dict[str, str] = {}
+    stripped: dict[str, set] = {}
     by_maturity: dict[str, list] = {}
     for row in conn.execute("SELECT * FROM bonds WHERE isin LIKE 'LKB%'"):
         if row["series_label"]:
             by_label[row["series_label"]] = row["isin"]
+            # The series letter is not printed consistently: an announcement
+            # said "11.20%2033" for the bond the quote sheet calls
+            # "11.20%2033A". Keep a letter-insensitive index as a fallback,
+            # used only where it resolves to exactly one bond.
+            stripped.setdefault(row["series_label"].rstrip(ascii_uppercase),
+                                set()).add(row["isin"])
         by_maturity.setdefault(row["maturity_date"], []).append(row)
-    return by_label, by_maturity
+    return by_label, stripped, by_maturity
 
 
 def _resolve_isin(lookup, quote) -> tuple[str | None, str]:
@@ -99,20 +115,27 @@ def _resolve_isin(lookup, quote) -> tuple[str | None, str]:
     coupon decides and anything still unclear is left unresolved rather
     than guessed.
     """
-    by_label, by_maturity = lookup
+    by_label, stripped, by_maturity = lookup
     label = quote["series_label"]
     if label and label in by_label:
         return by_label[label], "label"
+    if label:
+        same = stripped.get(label.rstrip(ascii_uppercase), set())
+        if len(same) == 1:
+            return next(iter(same)), "label-no-letter"
 
-    candidates = by_maturity.get(quote["maturity_date"].isoformat(), [])
-    if len(candidates) == 1:
-        return candidates[0]["isin"], "maturity"
+    # Maturity alone is NOT enough, even when only one bond matches: two
+    # different series can mature on the same day (a step-coupon
+    # restructuring bond and an ordinary one both mature 15 Jan 2033), and
+    # attributing one's quotes to the other silently merges two bonds'
+    # histories. The coupon must agree wherever both are known.
     coupon = quote["coupon_pct"]
-    matching = [bond for bond in candidates
-                if bond["coupon_pct"] is not None and coupon is not None
-                and abs(bond["coupon_pct"] - coupon) < 0.005]
-    if len(matching) == 1:
-        return matching[0]["isin"], "maturity+coupon"
+    candidates = by_maturity.get(quote["maturity_date"].isoformat(), [])
+    agreeing = [bond for bond in candidates
+                if bond["coupon_pct"] is None or coupon is None
+                or abs(bond["coupon_pct"] - coupon) < 0.005]
+    if len(agreeing) == 1:
+        return agreeing[0]["isin"], "maturity+coupon"
     return None, "unresolved"
 
 
@@ -144,7 +167,7 @@ def _ingest_daily_summary(conn, item: WorkItem, path, raw_ref):
     db.clear_quotes(conn, raw_ref)  # see the note in _ingest_volumes
     lookup = _bond_lookup(conn)
     matched = unmatched = 0
-    how = {"label": 0, "maturity": 0, "maturity+coupon": 0}
+    how = {"label": 0, "label-no-letter": 0, "maturity+coupon": 0}
     for quote in parsed.quotes:
         matched_isin, method = _resolve_isin(lookup, quote)
         if matched_isin is None:
@@ -159,8 +182,8 @@ def _ingest_daily_summary(conn, item: WorkItem, path, raw_ref):
                         quote["bid_yield"], quote["offer_yield"],
                         quote["bid_price"], quote["offer_price"], raw_ref)
         matched += 1
-    note = (f"{matched} quotes ({how['label']} by label, "
-            f"{how['maturity'] + how['maturity+coupon']} by maturity; "
+    note = (f"{matched} quotes ({how['label'] + how['label-no-letter']} by label, "
+            f"{how['maturity+coupon']} by maturity; "
             f"{unmatched} unresolved)")
     if matched == 0:
         raise ParseError("no quote row matched a known bond — " + note)
@@ -182,6 +205,33 @@ def _ingest_trade_summary(conn, item: WorkItem, path, raw_ref):
                                 row["wavg_yield"], row["volume_lkr"],
                                 row["n_trades"], raw_ref)
     return iso, f"{len(parsed.rows)} trade rows"
+
+
+def _ingest_announcement(conn, item: WorkItem, path, raw_ref):
+    """Auction announcement -> bond reference data + the offered amounts.
+
+    This is the richest reference source: series label beside ISIN (so
+    quotes resolve), plus date of issue, coupon payment dates and accrued
+    interest, which exist nowhere else in the published data. The rows also
+    mark which bonds were being auctioned, which is how the signals stage
+    knows what is on the run.
+    """
+    parsed = parse_auction.parse_announcement(path)
+    iso = parsed.auction_date.isoformat()
+    db.clear_auction(conn, raw_ref)
+    for bond in parsed.bonds:
+        tenor, _ = isin.decode(bond["isin"])
+        db.upsert_bond(conn, bond["isin"], bond["coupon_pct"],
+                       bond["maturity_date"].isoformat(), tenor, iso,
+                       series_label=bond["series_label"],
+                       issue_date=bond["issue_date"].isoformat() if bond["issue_date"] else None,
+                       coupon_dates=bond["coupon_dates"])
+        db.upsert_auction(
+            conn, iso, bond["isin"], "announced",
+            parsed.settlement_date.isoformat() if parsed.settlement_date else None,
+            None, bond["offered_lkr"], None, None, raw_ref,
+            accrued_per_100=bond["accrued_per_100"])
+    return iso, f"announcement: {len(parsed.bonds)} bonds offered"
 
 
 def _ingest_auction(conn, item: WorkItem, path, raw_ref):
@@ -216,6 +266,7 @@ def _ingest_auction(conn, item: WorkItem, path, raw_ref):
 
 
 INGESTERS = {
+    "bond_issuance": _ingest_announcement,
     "bond_auction": _ingest_auction,
     "volumes": _ingest_volumes,
     "daily_summary": _ingest_daily_summary,

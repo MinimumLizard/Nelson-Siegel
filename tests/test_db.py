@@ -94,3 +94,32 @@ def test_clear_trade_summary_scoped_to_one_file(tmp_path):
     db.clear_trade_summary(conn, "fileA")
     remaining = conn.execute("SELECT isin FROM trade_summary").fetchall()
     assert [r["isin"] for r in remaining] == ["LKB01035F159"]
+
+
+def test_repair_clears_a_step_coupon_note_on_an_ordinary_bond(tmp_path):
+    """A step-coupon note on a single-coupon bond means the note came from
+    ANOTHER bond's quote — the symptom of two bonds' histories merging."""
+    path = tmp_path / "repair.sqlite"
+    conn = db.connect(path)
+    db.upsert_bond(conn, "LKB01533A154", 11.2, "2033-01-15", 15, "2026-01-01",
+                   notes="12.4%7.5%5%2033A", series_label="11.20%2033")
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(path)          # repair runs on connect
+    row = conn.execute("SELECT notes FROM bonds WHERE isin='LKB01533A154'").fetchone()
+    assert row["notes"] is None
+
+
+def test_repair_keeps_a_genuine_step_coupon_note(tmp_path):
+    """A step-coupon note on a step-coupon bond is real provenance."""
+    path = tmp_path / "repair.sqlite"
+    conn = db.connect(path)
+    db.upsert_bond(conn, "LKB00931E153", 12.4, "2031-05-15", 9, "2026-01-01",
+                   notes="12.4%7.5%5%2031A", series_label="12.40%7.50%5.00%2031A")
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(path)
+    row = conn.execute("SELECT notes FROM bonds WHERE isin='LKB00931E153'").fetchone()
+    assert row["notes"] == "12.4%7.5%5%2031A"

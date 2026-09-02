@@ -174,3 +174,33 @@ def test_auction_rejects_unrelated_pdf():
     from pipeline.parse_daily import ParseError
     with pytest.raises(ParseError):
         parse_auction.parse(FIXTURES / "trade_summary_2026-08-28.pdf")
+
+
+def test_auction_announcement():
+    """Announcements are the richest reference source: series label beside
+    ISIN, plus issue date, coupon dates and accrued interest, which exist
+    nowhere else in the published data."""
+    from pipeline import parse_auction
+    announcement = parse_auction.parse_announcement(
+        FIXTURES / "announcement_2026-08-25.pdf")
+    assert announcement.auction_date == date(2026, 8, 25)
+    assert announcement.settlement_date == date(2026, 9, 1)
+    assert len(announcement.bonds) == 2
+
+    first = announcement.bonds[0]
+    assert first["isin"] == "LKB00530H016"
+    assert first["series_label"] == "10.00%2030A"
+    assert first["coupon_pct"] == 10.0
+    assert first["issue_date"] == date(2025, 8, 1)
+    assert first["coupon_dates"] == "02-01,08-01"   # printed "01 February & 01 August"
+    assert first["offered_lkr"] == 30_000_000_000
+    # Accrued 0.8424 per 100 == 5.00 * 31/184: actual/actual, semi-annual,
+    # 31 days from the 01 August coupon to the 01 September settlement.
+    assert first["accrued_per_100"] == pytest.approx(5.0 * 31 / 184, abs=1e-4)
+
+
+def test_announcement_rejects_a_result_release():
+    from pipeline import parse_auction
+    from pipeline.parse_daily import ParseError
+    with pytest.raises(ParseError):
+        parse_auction.parse_announcement(FIXTURES / "auction_2026-01-12_wrapped.pdf")

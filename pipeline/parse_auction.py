@@ -59,8 +59,26 @@ SERIES_RE = re.compile(
     r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(20\d{2})\s*[‘’'\"]?\s*([A-Z])\s*[‘’'\"]?")
 
 ISIN_RE = re.compile(r"LKB\d{5}[A-L]\d{3}")
+# "Rs. 30,000 million", "10.00% per annum", "Rs. 0.8424 per Rs.100.00"
+EMBEDDED_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+MONTH_DAY_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]+)")
 NUMBER_RE = re.compile(r"^\d[\d,]*(?:\.\d+)?$")
 SPELLED_DATE_RE = re.compile(r"\d{1,2}\s+[A-Za-z]+\s+\d{4}")
+
+
+@dataclass
+class Announcement:
+    """A forward-looking auction announcement (published before the auction).
+
+    Richer than the result release: it is the only source giving each bond's
+    date of issue, its coupon payment dates, and the accrued interest at
+    settlement — the inputs a clean/dirty price calculation needs — and it
+    names the bonds currently being auctioned, which is what "on the run"
+    means in practice.
+    """
+    auction_date: date
+    settlement_date: date | None = None
+    bonds: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -148,6 +166,109 @@ def _find_field(rows, keyword, converter):
             if keyword.lower() in row[label_index].lower():
                 return [converter(value) for value in row[2]]
     return None
+
+
+def _embedded_number(text):
+    """First number inside a phrase: "Rs. 30,000 million" -> 30000.0."""
+    match = EMBEDDED_NUMBER_RE.search(_clean(text))
+    return float(match.group(0).replace(",", "")) if match else None
+
+
+def _coupon_dates(text) -> str | None:
+    """"01 February & 01 August" -> "02-01,08-01" (month-day, sorted).
+
+    Normalised so the pair can be compared and used arithmetically; the
+    printed order varies and is not always chronological.
+    """
+    months = {name.lower(): number for number, name in enumerate(
+        ["", "January", "February", "March", "April", "May", "June", "July",
+         "August", "September", "October", "November", "December"])}
+    found = []
+    for day, month_name in MONTH_DAY_RE.findall(_clean(text)):
+        month = months.get(month_name.lower())
+        if month:
+            found.append(f"{month:02d}-{int(day):02d}")
+    return ",".join(sorted(set(found))) if found else None
+
+
+def _date_after(flat: str, phrase: str) -> date | None:
+    """The first spelled date following `phrase` (an optional weekday first)."""
+    match = re.search(re.escape(phrase) + r"\s+(?:\w+day,?\s*)?" + SPELLED_DATE_RE.pattern,
+                      flat, re.I)
+    return dates.parse_spelled(match.group(0)[len(phrase):]) if match else None
+
+
+def parse_announcement(path) -> Announcement:
+    """Read an auction ANNOUNCEMENT (published ahead of the auction).
+
+    The table is the tidy one of the three shapes: field names in the left
+    column, one column per bond, nothing wrapped. It is parsed with the same
+    helpers as the result releases, only with its own field names.
+    """
+    import pdfplumber
+
+    try:
+        with pdfplumber.open(path) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            tables = [table for page in pdf.pages for table in page.extract_tables()]
+    except Exception as error:
+        raise ParseError(f"cannot open as PDF: {error}") from error
+
+    flat = dates.collapse_ws(text)
+    if not re.search(r"ISSUE OF RS[\s\d,]+MILLION TREASURY BONDS", flat, re.I):
+        raise ParseError("not a treasury bond issuance announcement")
+
+    table = next((candidate for candidate in tables if _bond_columns(candidate)[1]), None)
+    if table is None:
+        raise ParseError("no bond table found in the announcement")
+    first_column, isins = _bond_columns(table)
+    rows = _field_rows(table, first_column, len(isins))
+
+    # "Date of auction" and "Date of settlement" span the bond columns, so
+    # they are read from the flattened text rather than the per-bond rows.
+    auction_date = _date_after(flat, "Date of auction")
+    if auction_date is None:
+        # Fallback: the opening sentence names it as "an auction on August 25, 2026".
+        opener = re.search(r"auction on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})", flat, re.I)
+        if opener:
+            month, day, year = re.match(
+                r"([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})", opener.group(1)).groups()
+            auction_date = dates.parse_spelled(f"{day} {month} {year}")
+    if auction_date is None:
+        raise ParseError("no auction date in the announcement")
+
+    result = Announcement(auction_date=auction_date,
+                          settlement_date=_date_after(flat, "Date of settlement"))
+
+    labels = _find_field(rows, "Series", series.normalise) or []
+    offered = _find_field(rows, "Amount offered", _embedded_number) or []
+    coupons = _find_field(rows, "Coupon rate", _embedded_number) or []
+    issued = _find_field(rows, "Date of issue", dates.parse_spelled) or []
+    maturities = _find_field(rows, "Date of maturity", dates.parse_spelled) or []
+    coupon_days = _find_field(rows, "coupon payment", _coupon_dates) or []
+    accrued = _find_field(rows, "Accrued Interest", _embedded_number) or []
+
+    def pick(values, index):
+        return values[index] if index < len(values) else None
+
+    for index, isin in enumerate(isins):
+        _, maturity_from_isin = isin_mod.decode(isin)
+        printed = pick(maturities, index)
+        if printed and printed != maturity_from_isin:
+            log.warning("%s: printed maturity %s disagrees with %s — trusting the ISIN",
+                        path, printed, isin)
+        offered_mn = pick(offered, index)
+        result.bonds.append({
+            "isin": isin,
+            "series_label": pick(labels, index),
+            "maturity_date": maturity_from_isin,
+            "coupon_pct": pick(coupons, index),
+            "issue_date": pick(issued, index),
+            "coupon_dates": pick(coupon_days, index),
+            "accrued_per_100": pick(accrued, index),
+            "offered_lkr": db.lkr_from_millions(offered_mn) if offered_mn else None,
+        })
+    return result
 
 
 def parse(path) -> Auction:

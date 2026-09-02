@@ -43,6 +43,15 @@ BOND_AUCTION_INDEX_URLS = {
     2026: f"{PDMO_BASE}/web/result-treasury-bonds/section/2026",
 }
 
+# Auction ANNOUNCEMENTS, published ahead of each auction. Richer than the
+# result releases: they carry each bond's date of issue, coupon payment
+# dates and accrued interest, and they name the bonds currently being
+# auctioned — which is what "on the run" means in practice.
+BOND_ISSUANCE_INDEX_URLS = {
+    2025: f"{PDMO_BASE}/web/treasury-bonds-issuances/section/2025",
+    2026: f"{PDMO_BASE}/web/treasury-bonds-issuances/section/2026",
+}
+
 # Further PDMO index pages (supplied by the user). Inspection showed both
 # are hub pages with no files of their own, listing the sections above.
 PDMO_EXTRA_INDEX_URLS = {
