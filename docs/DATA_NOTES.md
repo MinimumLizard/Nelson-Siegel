@@ -383,3 +383,79 @@ Treat it as context rather than a signal: 44 events is few, the sample is
 one 9-month regime, and 6bp is well inside a typical 16bp bid-offer. Its
 practical use is judging a reading — a benchmark showing +5bp cheap a week
 after its auction is closer to normal than the number alone suggests.
+
+## Treasury bills: the funding leg
+
+`trade_summary` carries executed T-bill trades alongside the bonds
+(`security_type='Tbill'`, 686 rows over the sample). Bill ISINs use the same
+12-character layout and the same Luhn check digit as bonds, with two
+differences: the prefix is `LKA` rather than `LKB`, and the three-digit
+field is the original tenor in **days** (091, 182, 364) rather than in
+years. `pipeline/isin.decode_bill` handles them; the check digit rejects a
+mangled cell exactly as it does for bonds.
+
+That gives a funding leg from published data rather than an assumption. A
+"12-month" rate is taken as any bill with 240 to 380 days left to run,
+volume-weighted. Two facts about its availability shape the code:
+
+* bills near the one-year point print on **52% of curve days** — so the most
+  recent print on or before the day being scored is used, and its staleness
+  is reported (median 1 day, max 6 over the last 60);
+* on most of those days exactly **one** such bill trades — so a single trade
+  would otherwise set the funding rate for the entire book. Prints are
+  volume-weighted over a 5-day trailing window instead, which lifts the
+  median sample to 2 and cuts the day-to-day jitter to 1.5bp.
+
+The rate moved from 8.04% to 9.75% over the sample, so carry is not a
+constant either.
+
+## The quote-to-trade gap moves, and that is the finding
+
+On days a bond both quoted and traded, the executed weighted-average yield
+can be compared with the quoted mid. Over 2,077 such bond-days the median
+gap is +10.4bp and the mean +16.5bp — but a single number is the wrong
+summary, because the monthly medians run:
+
+    2025-12   +8.3      2026-03  +15.2      2026-06  +51.9      2026-09   -6.6
+    2026-01   +9.8      2026-04  +16.7      2026-07  +22.5
+    2026-02   +0.8      2026-05  +20.6      2026-08   -3.6
+
+Early June ran +100 to +134bp on the daily medians, across 25 of the 31
+bonds that traded, decaying smoothly over a fortnight. That is not a parse
+artifact — it is market-wide and it decays — it looks like dealer screens
+lagging a fast move while trades printed far cheaper. The gap is negative
+now, so the sample average has the wrong sign for the current regime.
+
+### Why it is not bucketed by tenor
+
+The whole-sample tenor split is tempting:
+
+    0-2y   +17.9      4-7y    +10.1      10y+   +8.6
+    2-4y    +9.4      7-10y    +8.3
+
+and the front-end effect is broad, not one name: 16 of 16 front-end bonds
+sit above +12bp. It still fails out of sample. Predicting a bucket's
+next-quarter median from that bucket's own past gives a mean absolute error
+of **10.9bp**, against **9.2bp** for using the blended past — the bucketed
+estimate is worse. The reason is visible in the quarterly table: the
+market-wide level swings by 50bp while the tenor spread is worth about 9bp,
+and the front-wider-than-long ordering held in 2025Q4, 2026Q1 and 2026Q2 but
+**reversed** in 2026Q3 (front +4.5 against +5.9 at 7-10y).
+
+Window length was chosen the same way, on out-of-sample error predicting
+each day's realised gap: all history 18.1bp, 120 days 18.0bp, 60 days
+16.5bp, 20 days 13.0bp. Hence a 20-day blended window. Even that is a 13bp
+standard error on a quantity that has ranged over 140bp, so it describes a
+regime rather than a level.
+
+### What it does and does not affect
+
+It does **not** bias any z-score. A bond is scored against its own trailing
+mean, so any offset that is stable for that bond divides out completely; a
+tenor-dependent but stable gap cannot move a z-score at all.
+
+It does change the yield you actually buy at, which is where carry starts.
+Because the estimate is blended across the market, it shifts every bond's
+carry by the same amount — moving the level and not the ranking. That is why
+`signals/carry.py` takes it as a single `entry_gap_bp` argument rather than
+a per-bond adjustment.

@@ -25,7 +25,7 @@ a standalone trade, and the table says so rather than leaving it implied.
 import argparse
 
 from pipeline import db
-from signals import liquidity
+from signals import carry, execution, liquidity
 
 # Empirical, measured on this sample by `python -m signals.validate`:
 # mean absolute reversion of a pair spread over the following 10 days.
@@ -71,8 +71,20 @@ def show(conn, obs_date: str, top: int) -> None:
             line += (f"; vs {fit['n_trades']} trades bias {fit['trade_bias_bp']:+.1f}bp")
         print(line)
 
+    gap = execution.gap(conn, obs_date)
+    print(f"execution: {execution.describe(gap)}")
+    money = carry.funding_rate(conn, obs_date)
+    if money:
+        print(f"funding: {money['rate_pct']:.2f}% "
+              f"= {money['bill_pct']:.2f}% 12m bill + {money['spread_bp']:.0f}bp"
+              + (f" (bill as of {money['as_of']})" if money["stale_days"] > 1 else ""))
+
     spreads = spreads_on(conn, obs_date)
     facts = liquidity.profile(conn, obs_date)
+    # Carry is quoted at a realistic entry, not the screen mid. The shift is
+    # the same for every bond, so it moves the level and not the ranking.
+    money_facts = carry.profile(conn, obs_date,
+                                entry_gap_bp=gap["gap_bp"] if gap else 0.0)
     tradeable = {isin for isin, spread in spreads.items()
                  if spread <= MAX_TRADEABLE_SPREAD_BP
                  and liquidity.is_tradeable(facts.get(isin))}
@@ -91,18 +103,25 @@ def show(conn, obs_date: str, top: int) -> None:
         if not subset:
             return
         print(f"\n{title}")
-        header = (f"  {'series':<18}{'resid':>8}{'norm':>8}{'gap':>8}{'z':>7}"
-                  f"{'b/o':>6}{'Rs bn':>8}{'days':>6}")
+        header = f"  {'series':<18}{'resid':>8}{'gap':>8}{'z':>7}{'b/o':>6}"
+        if show_auction:                      # the core book carries more
+            header += f"{'carry':>7}{'roll':>6}{'per dur':>9}"
+        header += f"{'Rs bn':>8}{'days':>6}"
         print(header + (f"{'auction':>10}{'cover':>7}" if show_auction else ""))
         for row in subset:
             spread = spreads.get(row["isin"])
             fact = facts.get(row["isin"], {})
             line = (f"  {(row['series_label'] or row['isin']):<18}"
-                    f"{row['residual_bp']:>+8.1f}{row['mean_bp']:>+8.1f}"
+                    f"{row['residual_bp']:>+8.1f}"
                     f"{row['dislocation_bp']:>+8.1f}{row['zscore']:>7.1f}"
-                    f"{(f'{spread:.0f}' if spread else '-'):>6}"
-                    f"{fact.get('turnover_lkr', 0) / 1e9:>8.1f}"
-                    f"{fact.get('days_traded', 0):>6}")
+                    f"{(f'{spread:.0f}' if spread else '-'):>6}")
+            if show_auction:
+                held = money_facts.get(row["isin"])
+                line += ((f"{held['carry_bp']:>7.0f}{held['roll_bp']:>+6.0f}"
+                          f"{held['per_duration_bp']:>9.0f}") if held
+                         else f"{'-':>7}{'-':>6}{'-':>9}")
+            line += (f"{fact.get('turnover_lkr', 0) / 1e9:>8.1f}"
+                     f"{fact.get('days_traded', 0):>6}")
             if show_auction:
                 since = fact.get("days_since_auction")
                 marker = (f"{since}d" + ("*" if fact.get("post_auction") else "")
@@ -177,11 +196,15 @@ def show(conn, obs_date: str, top: int) -> None:
             print(f"  {buy:<20}{sell:<20}{abs(row['dislocation_bp']):>8.1f}"
                   f"{row['zscore']:>7.1f}{cost:>7.0f}{capture:>7.1f}  {verdict}")
 
-    print("\ngap = distance from its own recent norm, bp | z = in its own standard "
-          "deviations\ncost = half the bid-offer on each leg | exp = historical "
-          "10-day reversion at this z\nRs bn / days = turnover and days traded in "
-          f"the last {liquidity.WINDOW_DAYS} | auction = days since it was last sold"
-          f"\n* = inside the {liquidity.POST_AUCTION_DAYS}-day post-auction window")
+    print("\nresid = distance from the fitted curve, bp (positive = cheap) | gap = "
+          "from its OWN\nrecent norm | z = that in its own standard deviations | "
+          "cost = half the bid-offer\non each leg | exp = historical 10-day "
+          "reversion at this z\ncarry = entry yield less funding, bp p.a. | roll = "
+          "price gain from ageing down\nthe curve | per dur = the two together per "
+          "year of duration, which is the only\none of them that is not mostly a "
+          "bet on duration\nRs bn / days = turnover and days traded in the last "
+          f"{liquidity.WINDOW_DAYS} | auction = days since it was\nlast sold | "
+          f"* = inside the {liquidity.POST_AUCTION_DAYS}-day post-auction window")
     if hidden:
         print(f"{hidden} scored bond(s) not shown: quoted wider than "
               f"{MAX_TRADEABLE_SPREAD_BP:.0f}bp, or traded on fewer than "

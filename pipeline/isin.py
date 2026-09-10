@@ -9,7 +9,7 @@ included) — see docs/DATA_NOTES.md. The layout of e.g. LKB00934F154:
     |   |   |   |   +--------- maturity month, A=Jan ... L=Dec (F=June)
     |   |   |   +------------- maturity year, 20YY (2034)
     |   |   +----------------- original tenor in years, zero-padded (9)
-    |   +--------------------- B = treasury bond (bills use LKA...)
+    |   +--------------------- B = treasury bond (A = treasury bill)
     +------------------------- country code
 
 Why this matters: the daily summary's quote table has NO ISIN column, only
@@ -20,6 +20,9 @@ import re
 from datetime import date
 
 BOND_ISIN_RE = re.compile(r"^LKB\d{3}\d{2}[A-L]\d{2}\d$")
+# Bills share the layout and the check digit, but the three-digit field is
+# the original tenor in DAYS (091, 182, 364) rather than in years.
+BILL_ISIN_RE = re.compile(r"^LKA\d{3}\d{2}[A-L]\d{2}\d$")
 
 
 def check_digit(body11: str) -> str:
@@ -44,6 +47,13 @@ def build(tenor_years: int, maturity: date) -> str:
     return body + check_digit(body)
 
 
+def build_bill(tenor_days: int, maturity: date) -> str:
+    """Original tenor in days + maturity -> full 12-character bill ISIN."""
+    body = (f"LKA{tenor_days:03d}{maturity.year % 100:02d}"
+            f"{chr(64 + maturity.month)}{maturity.day:02d}")
+    return body + check_digit(body)
+
+
 def decode(isin: str) -> tuple[int, date] | None:
     """Bond ISIN -> (tenor_years, maturity date); None if it doesn't parse
     or the check digit is wrong (a mangled cell, not a real ISIN)."""
@@ -58,5 +68,20 @@ def decode(isin: str) -> tuple[int, date] | None:
     day = int(isin[9:11])
     try:
         return tenor, date(year, month, day)
+    except ValueError:
+        return None
+
+
+def decode_bill(isin: str) -> tuple[int, date] | None:
+    """Bill ISIN -> (original tenor in DAYS, maturity date), or None.
+
+    Same 12-character layout and check digit as a bond, so the only
+    difference is that LKA364... is a 364-day bill, not a 364-year one.
+    """
+    isin = isin.strip().upper()
+    if not BILL_ISIN_RE.match(isin) or check_digit(isin[:11]) != isin[11]:
+        return None
+    try:
+        return int(isin[3:6]), date(2000 + int(isin[6:8]), ord(isin[8]) - 64, int(isin[9:11]))
     except ValueError:
         return None
