@@ -22,7 +22,7 @@ from pathlib import Path
 from curves import nelson_siegel as ns
 from dashboard import palette
 from pipeline import config, db
-from signals import liquidity
+from signals import carry, execution, liquidity
 from signals.report import MAX_TRADEABLE_SPREAD_BP, _expected_capture
 
 OUTPUT = Path("docs/index.html")
@@ -75,6 +75,11 @@ def gather(conn) -> dict | None:
             WHERE s.obs_date=? ORDER BY ABS(s.zscore) DESC""", (obs_date,))
         if {r["isin_a"], r["isin_b"]} <= core_isins][:8]
     waiting = _waiting(conn, obs_date, facts)
+    # Two market-wide facts a level depends on: where trades actually print
+    # relative to the screen, and what it costs to fund a position.
+    gap = execution.gap(conn, obs_date)
+    money = carry.profile(conn, obs_date, entry_gap_bp=gap["gap_bp"] if gap else 0.0)
+    funding = carry.funding_rate(conn, obs_date)
     labels = {r["isin"]: r["series_label"] or r["isin"]
               for r in conn.execute("SELECT isin, series_label FROM bonds")}
 
@@ -93,6 +98,7 @@ def gather(conn) -> dict | None:
         "spreads": spreads, "signals": signals, "switches": switches,
         "core": core, "others": others, "core_isins": core_isins,
         "waiting": waiting, "liquidity": facts, "labels": labels,
+        "carry": money, "funding": funding, "gap": gap,
         "coverage": dict(coverage),
         "last_checked": dict(last_checked) if last_checked else None,
         "hidden": len(spreads) - len(tradeable),
@@ -350,7 +356,7 @@ def _signal_rows(signals, spreads, cheap: bool, limit=6, facts=None) -> str:
     return "".join(cells)
 
 
-def _core_rows(core, spreads, facts) -> str:
+def _core_rows(core, spreads, facts, money=None) -> str:
     """The core book in full, cheapest at the top.
 
     Unlike the other tables this one is never trimmed. It is only ever a
@@ -376,10 +382,16 @@ def _core_rows(core, spreads, facts) -> str:
         else:
             auction = f'{since}d'
         cover = f'{fact["bid_to_cover"]:.1f}×' if fact.get("bid_to_cover") else "–"
+        held = (money or {}).get(row["isin"])
+        carry_cells = (f'<td>{held["carry_bp"]:.0f}</td>'
+                       f'<td>{held["roll_bp"]:+.0f}</td>'
+                       f'<td><b>{held["per_duration_bp"]:.0f}</b></td>'
+                       if held else '<td>–</td><td>–</td><td>–</td>')
         out.append(
             f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td>'
             f'<td>{gap:+.1f}</td><td>{row["zscore"]:.1f}</td>'
             f'<td>{spread_cell}</td>'
+            f'{carry_cells}'
             f'<td>{fact.get("turnover_lkr", 0) / 1e9:.0f}</td>'
             f'<td>{fact.get("days_traded", 0)}</td>'
             f'<td>{auction}</td><td>{cover}</td>'
@@ -439,11 +451,22 @@ def render(data, fragment: bool = False) -> str:
     core = data.get("core", [])
     core_turnover = sum(data["liquidity"].get(row["isin"], {}).get("turnover_lkr", 0)
                         for row in core) / 1e9
+    funding, gap = data.get("funding"), data.get("gap")
+    fund_value = (f'{funding["rate_pct"]:.2f}<span style="font-size:15px">%</span>'
+                  if funding else "–")
+    fund_note = (f'{funding["bill_pct"]:.2f}% 12m bill + {funding["spread_bp"]:.0f}bp'
+                 if funding else "no recent bill print")
+    gap_value = (f'{gap["gap_bp"]:+.0f}<span style="font-size:15px">bp</span>'
+                 if gap else "–")
+    gap_note = (f'trades vs quote mid, last {gap["window_days"]}d' if gap
+                else "too few trades to measure")
     tiles = [
         ("core book", f'{len(core)}',
          f'benchmarks trading · Rs {core_turnover:.0f}bn in {liquidity.WINDOW_DAYS} days'),
-        ("bonds on the curve", f'{fit["n_quotes"]}', "quotes fitted"),
-        ("fit error", f'{fit["rmse_bp"]:.1f}<span style="font-size:15px">bp</span>', "weighted RMSE"),
+        ("funding", fund_value, fund_note),
+        ("execution gap", gap_value, gap_note),
+        ("fit error", f'{fit["rmse_bp"]:.1f}<span style="font-size:15px">bp</span>',
+         f'weighted RMSE over {fit["n_quotes"]} bonds'),
         ("vs executed trades", bias_value, bias_note),
         ("history", f'{coverage["days"]}', f'days from {coverage["first"]}'),
     ]
@@ -465,13 +488,22 @@ def render(data, fragment: bool = False) -> str:
     head = ('<th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
             '<th title="turnover over the last 60 days">Rs bn</th><th></th>')
     has_trades = any(r["source"] == "trade" for r in data["residuals"])
+    gap_shift = (
+        f'over the last {gap["window_days"]} days trades printed {abs(gap["gap_bp"]):.0f}bp '
+        f'{"cheaper" if gap["gap_bp"] > 0 else "richer"} than the quote mid'
+        if gap else "at the quoted mid, there being too few trades to measure the gap")
     core_table = (
         f'<table><thead><tr><th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
+        f'<th title="entry yield less the cost of funding, bp per year">carry</th>'
+        f'<th title="price gain from ageing down the curve, bp per year">roll</th>'
+        f'<th title="carry plus rolldown per year of duration — the only one of '
+        f'these that is not mostly a bet on duration">per dur</th>'
         f'<th title="turnover over the last {liquidity.WINDOW_DAYS} days">Rs bn</th>'
         f'<th title="days traded in the last {liquidity.WINDOW_DAYS}">days</th>'
         f'<th>auction</th><th title="bids over amount offered">cover</th><th></th>'
         f'</tr></thead><tbody>'
-        f'{_core_rows(core, data["spreads"], data["liquidity"])}</tbody></table>'
+        f'{_core_rows(core, data["spreads"], data["liquidity"], data.get("carry"))}'
+        f'</tbody></table>'
         if core else
         f'<p class="empty">No current benchmark cleared the trading floor of '
         f'{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS} '
@@ -503,6 +535,16 @@ def render(data, fragment: bool = False) -> str:
      decision can be executed in size. Shown in full rather than trimmed to the
      extremes: a benchmark sitting mid-pack is information too.</p>
   <div class="card">{core_table}</div>
+  <p class="foot"><b>carry</b> is the entry yield less the cost of funding and
+     <b>roll</b> the price gain from ageing down the curve, both bp per year;
+     <b>per dur</b> is the two together per year of duration. Read that column,
+     not the other two: across this book carry plus roll correlates +0.995 with
+     duration, so ranking on it just ranks by maturity. Per unit of duration the
+     ordering reverses, and today the whole book sits within a few bp of the
+     same number — the curve is charging about the same for every year of risk
+     on it. Carry is quoted at a realistic entry rather than the screen:
+     {gap_shift}. That shift is the same for every bond, so it moves the level
+     of carry and not the ordering.</p>
   <p class="foot"><b>Rs bn</b> and <b>days</b> are turnover and days traded over
      the last {liquidity.WINDOW_DAYS} · <b>auction</b> is days since this bond
      was last sold, <span class="hot">highlighted</span> inside the
