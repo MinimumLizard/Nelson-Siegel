@@ -1,20 +1,20 @@
 
-LKR government bond relative value — 2026-09-16
-curve: 45 bonds, fit RMSE 7.4bp, lambda 2.82y
+LKR government bond relative value — 2026-09-17
+curve: 45 bonds, fit RMSE 6.9bp, lambda 2.82y
 
 === CORE BOOK — 9 auction benchmark(s), actually trading ===
 
 cheapest at the top, richest at the bottom
   series               resid    norm     gap      z   b/o   Rs bn  days   auction  cover
-  11.60%2031A          +12.0    +3.3    +8.8    1.9    14    42.5    27       48d   2.9x
-  11.50%2032A           +3.3    -5.4    +8.7    1.6    17    14.6    18       97d   2.1x
-  11.20%2033            +5.8    +2.3    +3.4    0.8    19    17.8    24      112d   2.0x
-  11.00%2030B           +5.1    +3.2    +1.9    0.3    17    54.4    31       65d   2.9x
-  10.00%2030A           +9.9    +7.9    +2.0    0.3    16    64.3    31       5d*   1.5x
-  11.70%2034A           +0.0    -0.0    +0.1    0.0    24    96.0    32       5d*   2.3x
-  10.85%2036A           +1.5    +1.9    -0.4   -0.1    21    26.6    24       48d   2.1x
-  10.75%2037A           +4.1    +6.2    -2.1   -0.4    22    26.8    25       5d*   2.9x
-  11.00%2030A           -9.5    +0.7   -10.3   -2.8    16     5.6    17       97d   1.8x
+  11.60%2031A          +12.3    +3.6    +8.8    1.9    15    46.5    28       49d   2.9x
+  11.20%2033            +8.4    +2.3    +6.1    1.4    19    18.0    25      113d   2.0x
+  11.50%2032A           -3.8    -5.3    +1.5    0.3    19    14.6    18       98d   2.1x
+  11.00%2030B           +3.1    +3.4    -0.3   -0.1    16    54.6    32       66d   2.9x
+  10.00%2030A           +7.2    +7.8    -0.6   -0.1    15    70.4    32       6d*   1.5x
+  10.85%2036A           +1.3    +2.0    -0.7   -0.1    21    26.8    25       49d   2.1x
+  10.75%2037A           +4.6    +6.3    -1.6   -0.3    22    27.0    26       6d*   2.9x
+  11.70%2034A           -3.0    -0.0    -3.0   -0.9    24    96.0    32       6d*   2.3x
+  11.00%2030A           -4.4    +0.6    -5.0   -1.3    17     5.6    17       98d   1.8x
 
   * still inside the post-auction window: over the 15 auctions in this data
     bonds sat about 6bp cheap to their own norm for a fortnight afterwards.
@@ -23,26 +23,26 @@ cheapest at the top, richest at the bottom
 
 cheap to their own norm
   series               resid    norm     gap      z   b/o   Rs bn  days
-  11.50%2028B           +9.1    -0.6    +9.7    1.5    15     6.0    13
-  9.75%2030A            +8.7    +4.1    +4.7    1.2    14    17.7    12
-  12.00%2031A           +0.7    -8.5    +9.2    1.0    20     8.7    14
-  9.00%2033B            -0.7    -3.4    +2.8    0.6    25    20.6    21
+  9.75%2030A            +8.6    +4.2    +4.4    1.2    14    18.0    13
+  12.00%2031A           +1.9    -8.2   +10.0    1.0    16     8.7    14
+  11.50%2028B           +4.4    -0.6    +4.9    0.7    13     6.0    13
+  9.00%2033B            -2.8    -3.5    +0.7    0.1    26    22.9    22
 
 rich to their own norm
   series               resid    norm     gap      z   b/o   Rs bn  days
-  9.50%2030A            -1.2    +2.7    -3.9   -1.3    15    24.4    18
-  11.25%2026A           -9.7    -0.1    -9.6   -0.6    20    17.3    10
-  10.35%2029A           -6.5    -4.6    -1.8   -0.5    20     5.7    15
-  9.00%2028B            +3.6    +6.4    -2.8   -0.3    22     7.8    13
+  10.35%2029A           -9.1    -4.7    -4.3   -1.1    21     5.7    15
+  9.00%2028B            -0.8    +6.1    -6.9   -0.8    22     7.8    13
+  11.00%2029A          -10.8    -8.3    -2.6   -0.8    22     8.1    14
+  11.25%2026A          -10.1    -0.7    -9.5   -0.7    41    17.3    10
 
 SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
   buy                 sell                     gap      z   cost    exp  verdict
-  11.60%2031A         11.00%2030A             18.2    3.6     15   11.7  below costs
-  11.50%2032A         11.70%2034A             11.2    2.9     20    5.8  below costs
-  11.00%2030B         11.00%2030A             12.2    2.6     16    5.8  below costs
-  11.50%2032A         11.00%2030A             19.0    2.5     16    5.8  below costs
-  11.60%2031A         11.00%2030B              4.9    2.4     16    5.8  below costs
-  10.75%2037A         11.00%2030A              8.2    2.3     19    5.8  below costs
+  11.60%2031A         11.00%2030B              7.0    3.3     15   11.7  below costs
+  11.60%2031A         11.00%2030A             12.8    2.2     16    5.8  below costs
+  11.20%2033          11.70%2034A             10.5   -2.1     22    5.8  below costs
+  11.60%2031A         10.00%2030A              4.2   -2.0     15    5.8  below costs
+  11.60%2031A         10.85%2036A             13.0    2.0     18    0.0  weak signal
+  11.60%2031A         10.75%2037A             10.7    1.9     18    0.0  weak signal
 
 gap = distance from its own recent norm, bp | z = in its own standard deviations
 cost = half the bid-offer on each leg | exp = historical 10-day reversion at this z
