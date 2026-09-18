@@ -459,3 +459,142 @@ Because the estimate is blended across the market, it shifts every bond's
 carry by the same amount — moving the level and not the ranking. That is why
 `signals/carry.py` takes it as a single `entry_gap_bp` argument rather than
 a per-bond adjustment.
+
+## The trade file moved, and the curve stopped checking itself
+
+On 2026-09-18 the model looked healthy — the page said "updated", carried the
+current date, and every workflow run was green — while its only out-of-sample
+check had been dead for a week. Worth writing down, because nothing about it
+looked broken.
+
+**What happened.** The trade summary covering day D is published after that
+day's quote sheet. Until 2026-09-10 it arrived the same evening, so the
+nightly job ingested both and fitted day D's curve with its trades already
+present. From 2026-09-11 the file began arriving the following morning
+instead. The curve for day D was then fitted with no trades at all, and
+`available_dates(only_new=True)` only ever returned days with NO curve — so
+a day fitted early was never revisited, and its trades were dropped for good
+rather than late.
+
+**What it cost.** Four consecutive days (09-11, 09-14, 09-15, 09-16) carried
+55 executed trades the curve never saw. Priced against the curve stored for
+those days they read:
+
+    2026-09-11   8 trades   mean +20.0bp vs curve
+    2026-09-14  19 trades   mean +29.5bp
+    2026-09-15  16 trades   mean +40.0bp
+    2026-09-16  12 trades   mean +35.7bp
+
+That is the largest quote-to-trade divergence anywhere in the sample, and
+the check that exists to catch exactly this had switched itself off. The
+dashboard went on showing a trade-bias tile the whole time, quietly falling
+back to the last day that had a reading without saying how old it was.
+
+**The fix.** `dates_with_late_trades` refits any day whose stored `n_trades`
+differs from what `load_trades` returns now. It compares against that
+function rather than a raw row count, so a day whose trades are all
+legitimately unusable (step-coupon bonds, say) settles at its stored count
+instead of being refitted on every run. `trade_check_age` then reports how
+old the last real check is, and both surfaces shout past three days rather
+than printing a stale number as though it were today's.
+
+**Was the market really 35bp away?** Yes, and the quotes were live: 45 of 45
+bonds repriced every day through the period, and the 11.70%2034A mid moved
+11.53% to 11.84%. The screen was moving, just not fast enough — trades were
+printing 30-50bp cheap to quotes that were drifting up behind them.
+
+## One index page timing out killed the whole run
+
+The 2026-09-13 run failed outright on a 60-second connect timeout to
+treasury.gov.lk. Nothing was wrong with the data; the site was briefly
+unreachable. But the failure took down the curve, signals and dashboard
+steps too, none of which need the network and all of which had a perfectly
+good database to work from.
+
+`build_worklist` now logs and skips an index page it cannot reach, and only
+raises when EVERY page fails — which is an outage rather than a blip, and
+where continuing would report success having fetched nothing. Ingest is
+idempotent, so anything missed is picked up on the next run.
+
+## The curve was missing its entire long end
+
+The daily quote sheet carries 92 rows, of which the ISIN join resolved 46.
+The parse note reported the other 46 as "unresolved", which read like a
+join failure and was left alone for months. Looked at properly they are two
+completely different things:
+
+* **38 rows that belong nowhere near a curve.** The 2023 restructuring
+  block: step-coupon bonds (`12.00%9.00%2033A`, `12.40%7.50%5.00%2035A`) and
+  sub-1% bonds (`1.00%2032A`, `0.50%2040A`), posted at a flat 13.00 bid /
+  12.00 offer every single day. A 100bp administered quote is not a price
+  anyone deals on. One row, `12.00%9.00%2033A`, was even inverted at
+  10.835/14.00.
+* **8 rows that are ordinary bonds with ordinary prices**, quoted 18-30bp
+  wide and moving daily. They resolve to nothing only because no auction
+  release in the archive happens to name them.
+
+Five of that second group sit past 14 years:
+
+    7.80%2027A     0.9y      13.50%2044A   17.3y
+    13.25%2033A    6.8y      13.50%2044B   17.7y
+    13.25%2034A    7.3y      12.50%2045A   18.5y
+    12.00%2041A   14.3y
+    9.00%2043A    16.7y
+
+The curve ended at 12.9 years while quotes ran to 18.5. Everything past the
+2039 was extrapolation, including beta0, the parameter that is supposed to
+BE the long-run level.
+
+### Keying a bond with no ISIN
+
+A synthesised ISIN was rejected before and stays rejected: the sheet's tenor
+column disagrees with the tenor encoded in real ISINs 11 times out of 44, so
+a quarter of guesses would be wrong, and a wrong ISIN merges one bond's
+history into another's.
+
+`isin.synthetic_key` sidesteps that by keying on what actually identifies
+the cash flows — `SYN:2045-03-01:12.500` — behind a prefix no real ISIN can
+have. The failure mode is strictly better: a bad key SPLITS one bond across
+two keys rather than MERGING two bonds into one, and a split loses history
+where a merge corrupts it. `_bond_lookup` reads only `LKB%` rows, so a real
+ISIN always wins once an auction release names the bond, and the synthetic
+key simply stops receiving quotes.
+
+Admission is deliberately narrow (`_admissible_without_isin`): a single
+coupon in the label, a two-way quote, and a spread above zero and at most
+50bp. On 2026-09-17 that admitted exactly the 8 real bonds and rejected all
+38 administered ones.
+
+**Effect.** 45 bonds ending at 12.9y becomes 53 ending at 18.4y, with median
+weighted RMSE essentially unchanged — which is itself evidence the
+Nelson-Siegel shape genuinely extends out there rather than being bent to
+fit.
+
+## Lambda: the grid minimum is the wrong answer
+
+Extending the curve to 18.4 years moved the error-minimising lambda from
+2.82y to 4.72y. It was not adopted, and the reasoning is worth recording
+because it is the same argument that fixed lambda in the first place:
+
+    lambda    median RMSE    beta0 range      max 1-day move    >1pp moves
+    2.822        9.74bp      11.81-14.37          0.87pp             0
+    3.500        9.75bp      11.65-14.74          1.19pp             2
+    4.000        9.71bp      11.47-14.99          1.44pp             2
+    4.716        9.62bp      11.15-15.30          1.83pp             3
+    5.500        9.55bp      10.69-15.60          2.29pp             4
+
+The grid minimum buys 0.12bp of median fit and costs 1.6pp of beta0 range
+and a doubling of the largest daily move. For a model whose output is a
+residual measured against its own trailing history, parameters that mean the
+same thing on every date are worth far more than a tenth of a basis point.
+
+`calibrate_lambda` now encodes that: among lambdas within 2% of the best
+pooled error, take the smallest. On this sample it returns 2.822y — the
+value calibrated when the curve stopped at 13 years, which is a reassuring
+thing for a longer cross-section to agree on independently.
+
+It also no longer WRITES what it measures. That side effect bit during this
+very investigation: a diagnostic asking "what would lambda be now" silently
+repointed the stored model. Persisting is `--calibrate`'s own step
+(`store_lambda`), so measuring can never move the model underneath a stored
+history of residuals.

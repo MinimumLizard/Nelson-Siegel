@@ -24,6 +24,7 @@ a standalone trade, and the table says so rather than leaving it implied.
 
 import argparse
 
+from curves import fit as curve_fit
 from pipeline import db
 from signals import carry, execution, liquidity
 
@@ -70,6 +71,20 @@ def show(conn, obs_date: str, top: int) -> None:
         if fit["n_trades"]:
             line += (f"; vs {fit['n_trades']} trades bias {fit['trade_bias_bp']:+.1f}bp")
         print(line)
+
+    check = curve_fit.trade_check_age(conn, obs_date)
+    if check:
+        line = (f"vs executed trades: {check['bias_bp']:+.1f}bp bias over "
+                f"{check['n_trades']} trades on {check['obs_date']}")
+        if check["days_old"]:
+            line += f" ({check['days_old']}d ago)"
+        print(line)
+        if check["stale"]:
+            print(f"  !! that check is {check['days_old']} days old. The curve is "
+                  f"fitted to QUOTES and\n     this is its only test against where "
+                  f"bonds actually change hands.")
+    else:
+        print("vs executed trades: never checked — no day has both a curve and trades")
 
     gap = execution.gap(conn, obs_date)
     print(f"execution: {execution.describe(gap)}")

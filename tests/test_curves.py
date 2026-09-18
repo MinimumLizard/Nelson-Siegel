@@ -8,7 +8,7 @@ import pytest
 
 from curves import fit as curve_fit
 from curves import nelson_siegel as ns
-from pipeline import db
+from pipeline import db, isin
 
 
 # ---------------------------------------------------------------------------
@@ -153,3 +153,139 @@ def test_refitting_a_day_replaces_its_residuals(seeded):
     curve_fit.fit_day(conn, obs_date, lam)
     count = conn.execute("SELECT COUNT(*) c FROM curve_residuals").fetchone()["c"]
     assert count == 10  # 9 quotes + 1 trade, not doubled
+
+
+# ---------------------------------------------------------------------------
+# Late-arriving trades — the curve's only out-of-sample check
+# ---------------------------------------------------------------------------
+
+def _quoted_day(conn, obs_date, count=12):
+    """A day with enough quotes to fit, and nothing else.
+
+    ISINs are built rather than hard-coded so the check digits are real and
+    `bonds` gets a genuine maturity for each.
+    """
+    day = dt.date.fromisoformat(obs_date)
+    for index in range(count):
+        maturity = dt.date(day.year + 2 + index, 6, 15)
+        bond = isin.build(2 + index, maturity)
+        coupon = 10.0 + index * 0.25
+        db.upsert_bond(conn, bond, coupon, maturity.isoformat(), 2 + index, obs_date,
+                       series_label=f"{coupon:.2f}%{maturity.year}A")
+        level = 10.0 + index * 0.18
+        db.upsert_quote(conn, obs_date, bond, bid_yield=level + 0.08,
+                        offer_yield=level - 0.08, bid_price=100.0,
+                        offer_price=100.0, raw_ref="t")
+    conn.commit()
+    return [isin.build(2 + i, dt.date(day.year + 2 + i, 6, 15)) for i in range(count)]
+
+
+def test_a_day_fitted_before_its_trades_arrive_is_refitted_when_they_do(tmp_path):
+    """The trade file is published AFTER the quote sheet it belongs with, so a
+    curve fitted the evening quotes land has nothing to check itself against.
+    Only unfitted days used to be revisited, which dropped those trades for
+    good — and did it silently, exactly when the check mattered most."""
+    conn = db.connect(tmp_path / "late.sqlite")
+    bonds = _quoted_day(conn, "2026-09-16")
+    curve_fit.fit_day(conn, "2026-09-16")
+    conn.commit()
+    assert conn.execute("SELECT n_trades FROM curve_fits").fetchone()["n_trades"] == 0
+    assert curve_fit.dates_with_late_trades(conn) == set()      # nothing has arrived yet
+
+    # The next morning the trade summary for that day lands.
+    db.upsert_trade_summary(conn, "2026-09-16", bonds[0], "TBond",
+                            None, None, None, None, 11.90, 1_000_000_000, 3, "t")
+    conn.commit()
+    assert curve_fit.dates_with_late_trades(conn) == {"2026-09-16"}
+    assert "2026-09-16" in curve_fit.available_dates(conn, only_new=True)
+
+    curve_fit.fit_day(conn, "2026-09-16")
+    conn.commit()
+    row = conn.execute("SELECT n_trades, trade_bias_bp FROM curve_fits").fetchone()
+    assert row["n_trades"] == 1
+    assert row["trade_bias_bp"] is not None
+    # Settled: the day must not be refitted on every subsequent run.
+    assert curve_fit.dates_with_late_trades(conn) == set()
+    assert "2026-09-16" not in curve_fit.available_dates(conn, only_new=True)
+
+
+def test_an_unusable_trade_does_not_cause_a_refit_every_run(tmp_path):
+    """A trade in a bond the curve excludes leaves n_trades at 0 legitimately.
+    Comparing against `load_trades` rather than a raw row count keeps that day
+    settled instead of refitting it forever."""
+    conn = db.connect(tmp_path / "late.sqlite")
+    _quoted_day(conn, "2026-09-16")
+    db.upsert_bond(conn, "LKB00931E153", 12.4, "2031-05-15", 9, "2026-09-16",
+                   series_label="12.40%7.50%5.00%2031A")     # step-coupon: excluded
+    db.upsert_trade_summary(conn, "2026-09-16", "LKB00931E153", "TBond",
+                            None, None, None, None, 11.5, 1_000_000_000, 1, "t")
+    conn.commit()
+    curve_fit.fit_day(conn, "2026-09-16")
+    conn.commit()
+    assert conn.execute("SELECT n_trades FROM curve_fits").fetchone()["n_trades"] == 0
+    assert curve_fit.dates_with_late_trades(conn) == set()
+
+
+def test_trade_check_age_flags_a_stale_check(tmp_path):
+    """The newest day legitimately has no trades. A check several days old is
+    a fault, and must not be shown as though it were today's reading."""
+    conn = db.connect(tmp_path / "late.sqlite")
+    for day in ("2026-09-10", "2026-09-16"):
+        bonds = _quoted_day(conn, day)
+        curve_fit.fit_day(conn, day)
+    db.upsert_trade_summary(conn, "2026-09-10", bonds[0], "TBond",
+                            None, None, None, None, 11.90, 1_000_000_000, 3, "t")
+    conn.commit()
+    curve_fit.fit_day(conn, "2026-09-10")
+    conn.commit()
+
+    fresh = curve_fit.trade_check_age(conn, "2026-09-11")
+    assert fresh["obs_date"] == "2026-09-10" and fresh["days_old"] == 1
+    assert not fresh["stale"]
+
+    stale = curve_fit.trade_check_age(conn, "2026-09-17")
+    assert stale["days_old"] == 7 and stale["stale"]
+    assert curve_fit.trade_check_age(db.connect(tmp_path / "empty.sqlite"), "2026-09-17") is None
+
+
+# ---------------------------------------------------------------------------
+# Calibration must not move the model by being measured
+# ---------------------------------------------------------------------------
+
+def test_calibrating_lambda_does_not_store_it(tmp_path):
+    """Measuring lambda used to persist it as a side effect, so any diagnostic
+    that asked what lambda would be silently changed the model underneath a
+    stored history of residuals. Storing is now `--calibrate`'s own step."""
+    conn = db.connect(tmp_path / "cal.sqlite")
+    for day in ("2026-09-10", "2026-09-11"):
+        _quoted_day(conn, day)
+    before = curve_fit.get_lambda(conn)
+
+    chosen = curve_fit.calibrate_lambda(conn, ["2026-09-10", "2026-09-11"])
+    assert curve_fit.get_lambda(conn) == before      # untouched by measuring
+
+    curve_fit.store_lambda(conn, chosen)
+    assert curve_fit.get_lambda(conn) == pytest.approx(chosen)
+
+
+def test_calibration_prefers_a_steadier_lambda_over_a_marginally_better_fit(tmp_path):
+    """The grid minimum is the wrong objective: on the real cross-section it
+    buys 2% of pooled error and doubles beta0's largest daily move. The rule
+    takes the smallest lambda within STABILITY_TOLERANCE of the best."""
+    conn = db.connect(tmp_path / "cal.sqlite")
+    _quoted_day(conn, "2026-09-10")
+    dates = ["2026-09-10"]
+
+    chosen = curve_fit.calibrate_lambda(conn, dates)
+    quotes, _ = curve_fit.load_day(conn, "2026-09-10")
+    tau = np.array([q["tau"] for q in quotes])
+    observed = np.array([q["yield"] for q in quotes])
+    weights = curve_fit.weights_from_spreads(quotes)
+    totals = {float(lam): ns.fit_fixed(tau, observed, lam, weights)[2]
+              for lam in ns.LAMBDA_GRID}
+    floor = min(totals.values())
+
+    # Within tolerance of the best, and nothing smaller is.
+    assert totals[chosen] <= floor * (1 + curve_fit.STABILITY_TOLERANCE)
+    smaller = [lam for lam in totals if lam < chosen]
+    assert all(totals[lam] > floor * (1 + curve_fit.STABILITY_TOLERANCE) for lam in smaller)

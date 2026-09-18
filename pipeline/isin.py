@@ -85,3 +85,30 @@ def decode_bill(isin: str) -> tuple[int, date] | None:
         return int(isin[3:6]), date(2000 + int(isin[6:8]), ord(isin[8]) - 64, int(isin[9:11]))
     except ValueError:
         return None
+
+
+# Quotes with no ISIN we can verify are keyed on their own cash flows instead.
+# The prefix cannot collide with a real ISIN, which all begin LK.
+SYNTHETIC_PREFIX = "SYN:"
+
+
+def synthetic_key(coupon_pct: float, maturity: date) -> str:
+    """A stable key for a bond the published sources never name with an ISIN.
+
+    The daily quote sheet prices about 8 single-coupon bonds that no auction
+    release in the archive covers, five of them past 14 years — the entire
+    long end of the curve. They cannot be given a real ISIN: the sheet's
+    tenor column disagrees with the tenor encoded in genuine ISINs 11 times
+    out of 44, so a synthesised one would be wrong often enough to attribute
+    one bond's history to another.
+
+    So they are keyed on what actually identifies the cash flows, coupon and
+    maturity, behind a prefix that says plainly this is not an ISIN. A wrong
+    guess here can only SPLIT one bond into two keys, never merge two bonds
+    into one — and a split loses history where a merge corrupts it.
+    """
+    return f"{SYNTHETIC_PREFIX}{maturity.isoformat()}:{coupon_pct:.3f}"
+
+
+def is_synthetic(key: str) -> bool:
+    return str(key).startswith(SYNTHETIC_PREFIX)

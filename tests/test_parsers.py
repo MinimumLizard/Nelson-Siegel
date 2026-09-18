@@ -204,3 +204,64 @@ def test_announcement_rejects_a_result_release():
     from pipeline.parse_daily import ParseError
     with pytest.raises(ParseError):
         parse_auction.parse_announcement(FIXTURES / "auction_2026-01-12_wrapped.pdf")
+
+
+# ---------------------------------------------------------------------------
+# Quotes with no ISIN: the long end of the curve was being thrown away
+# ---------------------------------------------------------------------------
+
+def _quote(label, coupon, maturity, bid, offer):
+    return {"series_label": label, "coupon_pct": coupon,
+            "maturity_date": date.fromisoformat(maturity),
+            "bid_yield": bid, "offer_yield": offer}
+
+
+def test_a_genuine_two_way_quote_without_an_isin_is_admitted():
+    """The daily sheet prices about 8 single-coupon bonds no auction release
+    in the archive names, five of them past 14 years. Dropping them cost the
+    curve its whole long end — it ended at 12.9y with quotes out to 18.5y
+    sitting unused."""
+    from pipeline import ingest
+    assert ingest._admissible_without_isin(
+        _quote("12.50%2045A", 12.5, "2045-03-01", 12.366667, 12.183333))
+    assert ingest._admissible_without_isin(
+        _quote("7.80%2027A", 7.8, "2027-08-15", 9.914, 9.626))
+
+
+def test_the_administered_restructuring_block_stays_out():
+    """Those bonds are posted at a flat 13.00/12.00 every day. A 100bp quote
+    nobody deals on is not a curve point."""
+    from pipeline import ingest
+    assert not ingest._admissible_without_isin(
+        _quote("1.00%2033A", 1.0, "2033-07-15", 13.0, 12.0))      # 100bp wide
+    assert not ingest._admissible_without_isin(
+        _quote("12.40%7.50%5.00%2033A", 12.4, "2033-01-15", 13.0, 12.0))  # stepped
+    assert not ingest._admissible_without_isin(
+        _quote("12.00%9.00%2033A", 12.0, "2033-03-15", 10.835, 14.0))     # inverted
+    assert not ingest._admissible_without_isin(
+        _quote("9.00%2043A", 9.0, "2043-06-01", 12.3, None))              # one-way
+
+
+def test_a_synthetic_key_identifies_the_cash_flows_and_cannot_look_like_an_isin():
+    """A wrong key here can only split one bond into two, never merge two into
+    one — so it keys on coupon and maturity, and says so in the prefix."""
+    from pipeline import isin
+    key = isin.synthetic_key(12.5, date(2045, 3, 1))
+    assert isin.is_synthetic(key)
+    assert not key.startswith("LK")
+    # Same cash flows, same key, on every day it is quoted.
+    assert key == isin.synthetic_key(12.50, date(2045, 3, 1))
+    # Different bond, different key.
+    assert key != isin.synthetic_key(13.5, date(2045, 3, 1))
+    assert not isin.is_synthetic("LKB00934F154")
+
+
+def test_a_real_isin_always_wins_over_a_synthetic_key():
+    """Once an auction release names a bond, the label match resolves first,
+    so a bond never keeps collecting quotes under a synthetic key."""
+    from pipeline import ingest
+    ordinary = {"isin": "LKB01533A154", "series_label": "13.25%2033A",
+                "maturity_date": "2033-07-01", "coupon_pct": 13.25}
+    lookup = ({"13.25%2033A": "LKB01533A154"}, {}, {"2033-07-01": [ordinary]})
+    quote = _quote("13.25%2033A", 13.25, "2033-07-01", 11.73, 11.512)
+    assert ingest._resolve_isin(lookup, quote) == ("LKB01533A154", "label")

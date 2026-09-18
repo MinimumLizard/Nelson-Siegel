@@ -19,6 +19,7 @@ import datetime as dt
 import html
 from pathlib import Path
 
+from curves import fit as curve_fit
 from curves import nelson_siegel as ns
 from dashboard import palette
 from pipeline import config, db
@@ -89,9 +90,7 @@ def gather(conn) -> dict | None:
     # The trade summary for a day is published after its daily report, so the
     # newest curve often has no trades yet. Fall back to the most recent day
     # that does, labelled with its date, rather than showing a blank tile.
-    last_checked = conn.execute(
-        """SELECT obs_date, trade_bias_bp, n_trades FROM curve_fits
-            WHERE trade_bias_bp IS NOT NULL ORDER BY obs_date DESC LIMIT 1""").fetchone()
+    last_checked = curve_fit.trade_check_age(conn, obs_date)
 
     return {
         "obs_date": obs_date, "fit": fit, "residuals": residuals,
@@ -100,7 +99,7 @@ def gather(conn) -> dict | None:
         "waiting": waiting, "liquidity": facts, "labels": labels,
         "carry": money, "funding": funding, "gap": gap,
         "coverage": dict(coverage),
-        "last_checked": dict(last_checked) if last_checked else None,
+        "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
     }
 
@@ -440,12 +439,20 @@ def render(data, fragment: bool = False) -> str:
     their own <html>/<head>/<body> (an Artifact publish does)."""
     fit, coverage = data["fit"], data["coverage"]
     checked = data["last_checked"]
+    # The newest curve day normally has no trades yet — the trade file lands
+    # the morning after the quote sheet — so the last real reading is shown
+    # with its own date. Past STALE_CHECK_DAYS that is a fault, not a lag,
+    # and the tile says so rather than showing a number as if it were today's.
     if fit["trade_bias_bp"] is not None:
         bias_value = f'{fit["trade_bias_bp"]:+.0f}<span style="font-size:15px">bp</span>'
         bias_note = f'{fit["n_trades"]} trades held out'
     elif checked:
-        bias_value = f'{checked["trade_bias_bp"]:+.0f}<span style="font-size:15px">bp</span>'
-        bias_note = f'{checked["n_trades"]} trades on {checked["obs_date"]}'
+        bias_value = f'{checked["bias_bp"]:+.0f}<span style="font-size:15px">bp</span>'
+        bias_note = (f'{checked["n_trades"]} trades on {checked["obs_date"]}'
+                     f' · {checked["days_old"]}d ago')
+        if checked["stale"]:
+            bias_note = (f'<b class="hot">{checked["days_old"]} days stale</b> · '
+                         f'last checked {checked["obs_date"]}')
     else:
         bias_value, bias_note = "–", "no trades recorded yet"
     core = data.get("core", [])

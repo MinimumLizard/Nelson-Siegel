@@ -21,9 +21,9 @@ Three report families are ingested (details and quirks in
 | Treasury Bond issuance announcements | PDF | ISIN, series label, **date of issue, coupon payment dates, accrued interest**, amount offered — and which bonds are currently being auctioned |
 
 The archive reaches back to **1 Dec 2025** (the site publishes nothing older
-under these sections). A full backfill on 2026-08-31 ingested **542 files**
-with zero parse failures: 49 bonds, 8,069 daily observations and 2,727
-executed-trade rows spanning 2025-12-01 to 2026-08-31.
+under these sections). A full backfill on 2026-09-18 ingested **631 files**
+with zero parse failures: 59 bonds, 9,800 daily observations and 3,000
+executed-trade rows spanning 2025-12-01 to 2026-09-18.
 
 ### One known gap
 
@@ -39,11 +39,20 @@ The rest cannot be identified from any published source. Their ISINs cannot
 be synthesised either: the quote sheet's tenor column agrees with the tenor
 encoded in real ISINs only 33 times out of 44, so a quarter of synthesised
 ISINs would be wrong, and a wrong ISIN silently attributes one bond's
-history to another. The pipeline refuses to guess; each file's `parse_note`
-records the split so the gap is visible rather than hidden.
+history to another.
 
-45 bonds spanning roughly 1 to 13 years is ample for curve fitting, so this
-limits breadth, not curve quality.
+They are still priced, though, and throwing them away cost the curve its
+entire long end. So a bond the releases never name, but which carries a real
+two-way quote (single coupon, 18–30bp wide), is keyed on **its own cash
+flows** instead — `SYN:<maturity>:<coupon>`, a form that cannot be mistaken
+for an ISIN. A wrong key there can only split one bond into two, never merge
+two into one, and a split loses history where a merge corrupts it.
+
+That admits 8 bonds a day and takes the curve from **45 bonds ending at 12.9
+years to 53 ending at 18.4**, at a cost of 0.1bp in fit. The 38 rows still
+left out are the 2023 restructuring block — step-coupon and sub-1% bonds
+posted at an administered 13.00/12.00 every day, 100bp wide. Each file's
+`parse_note` records the split, so what is in and what is out stays visible.
 
 ## The data updates itself
 
@@ -217,11 +226,26 @@ better and costs far more than that: it pinned lambda at the top of the
 search range on 29% of days, where the slope and curvature factors go
 nearly collinear over the maturities actually observed, swinging the
 "long-run level" beta0 between 2.4% and 14.6% and moving it by up to
-6.9pp overnight. Held fixed, beta0 stays within 11.9–13.7% and moves at
-most 0.5pp a day, so the three parameters mean the same thing on every
-date — which is what a residual-based signal needs.
+6.9pp overnight.
 
-Typical fit quality: **10.8bp** weighted RMSE across 40–42 bonds a day.
+The same argument decides *which* fixed lambda. The error-minimising value
+on the current cross-section is 4.72y, and it is not the one used, because
+minimum error is the wrong objective here:
+
+| lambda | median RMSE | beta0 range | largest 1-day move |
+|---|---|---|---|
+| **2.82y** (used) | 9.74bp | 11.81–14.37 | 0.87pp |
+| 4.00y | 9.71bp | 11.47–14.99 | 1.44pp |
+| 4.72y (grid min) | 9.62bp | 11.15–15.30 | 1.83pp |
+
+Paying a percentage point of parameter stability for a tenth of a basis
+point is a bad trade when the whole purpose of a fixed lambda is that beta
+means the same thing on every date. `calibrate_lambda` therefore takes the
+**smallest** lambda whose pooled error is within 2% of the best — which on
+this sample independently returns 2.82y, the value chosen back when the
+curve stopped at 13 years.
+
+Typical fit quality: **9.7bp** median weighted RMSE across 53 bonds a day.
 
 ## The signals
 
