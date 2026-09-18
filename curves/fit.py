@@ -50,6 +50,11 @@ DEFAULT_LAMBDA_YEARS = 2.5
 
 MIN_TAU_YEARS = 0.08     # under a month: price is noise, not curve
 MIN_BONDS = 6            # fewer than this and the shape is not identified
+# How much pooled fit error a calibration will give up to keep the betas
+# comparable across dates. 2% of squared error is ~0.12bp of median RMSE —
+# far inside the 16bp bid-offer, and worth a percentage point of beta0
+# stability. See calibrate_lambda.
+STABILITY_TOLERANCE = 0.02
 MIN_SPREAD_BP = 1.0      # floor, so a zero spread cannot dominate the fit
 MAX_SPREAD_BP = 300.0    # beyond this the quote carries no information
 
@@ -85,6 +90,19 @@ def load_day(conn, obs_date: str):
         quotes.append({"isin": row["isin"], "tau": tau,
                        "yield": row["mid_yield"], "spread_bp": spread})
 
+    return quotes, load_trades(conn, obs_date)
+
+
+def load_trades(conn, obs_date: str) -> list:
+    """The day's executed trades, in the same shape as the quotes.
+
+    Kept as its own function because `dates_with_late_trades` needs exactly
+    this count. A second, separate definition of "a usable trade" would
+    drift away from this one, which is how the step-coupon flag went wrong
+    before.
+    """
+    day = dt.date.fromisoformat(obs_date)
+    trades = []
     for row in conn.execute(
             """SELECT t.isin, t.wavg_yield, b.maturity_date, b.series_label
                  FROM trade_summary t JOIN bonds b USING(isin)
@@ -97,8 +115,7 @@ def load_day(conn, obs_date: str):
         if tau < MIN_TAU_YEARS:
             continue
         trades.append({"isin": row["isin"], "tau": tau, "yield": row["wavg_yield"]})
-
-    return quotes, trades
+    return trades
 
 
 def weights_from_spreads(quotes) -> np.ndarray:
@@ -134,8 +151,28 @@ def calibrate_lambda(conn, dates) -> float:
     on 29% of days, where the slope and curvature factors are nearly
     collinear and the betas stop being separately identified.
 
-    So lambda is picked once, here, as the value minimising total weighted
-    squared error across every day, and then held fixed.
+    So lambda is picked once, here, and then held fixed.
+
+    It is NOT simply the error-minimising value. Minimum error is the wrong
+    objective for the same reason a free daily lambda is: on the current
+    cross-section, reaching to 18.4 years, the grid minimum is 4.72y and it
+    buys 2% of pooled squared error — about 0.12bp of median fit — while the
+    long-run level beta0 spreads from a 2.6pp range to 4.2pp and its largest
+    one-day move doubles from 0.87pp to 1.83pp. Paying a whole percentage
+    point of parameter stability for a tenth of a basis point is a bad trade
+    when the whole point of a fixed lambda is that beta means the same thing
+    on every date.
+
+    So the rule is: among the lambdas whose pooled error is within
+    STABILITY_TOLERANCE of the best, take the SMALLEST. A shorter lambda
+    puts the factors' curvature where the data is densest and keeps the
+    betas steadier. On this sample that independently returns 2.82y — the
+    value calibrated back when the curve stopped at 13 years, which is a
+    reassuring thing for a longer cross-section to agree on.
+
+    Nothing is written here. Persisting the value is `--calibrate`'s job, so
+    that measuring lambda can never quietly change the model underneath a
+    stored history of residuals.
     """
     days = []
     for obs_date in dates:
@@ -147,17 +184,23 @@ def calibrate_lambda(conn, dates) -> float:
     if not days:
         raise SystemExit("no days with enough quotes to calibrate lambda")
 
-    best = None
-    for lam in ns.LAMBDA_GRID:
-        total = sum(ns.fit_fixed(tau, y, lam, w)[2] for tau, y, w in days)
-        if best is None or total < best[0]:
-            best = (total, float(lam))
-    _, lam = best
+    totals = {float(lam): sum(ns.fit_fixed(tau, y, lam, w)[2] for tau, y, w in days)
+              for lam in ns.LAMBDA_GRID}
+    floor = min(totals.values())
+    near_best = [lam for lam, total in totals.items()
+                 if total <= floor * (1.0 + STABILITY_TOLERANCE)]
+    lam = min(near_best)
+    log.info("lambda: grid minimum %.3fy, chosen %.3fy (within %.0f%% of it, and "
+             "steadier) over %d days",
+             min(totals, key=totals.get), lam, STABILITY_TOLERANCE * 100, len(days))
+    return lam
+
+
+def store_lambda(conn, lam: float) -> None:
+    """Persist the calibrated lambda. Only `--calibrate` should call this."""
     conn.execute("""INSERT INTO curve_settings (key, value) VALUES ('lambda_years', ?)
                     ON CONFLICT(key) DO UPDATE SET value = excluded.value""", (str(lam),))
     conn.commit()
-    log.info("calibrated lambda = %.3f years over %d days", lam, len(days))
-    return lam
 
 
 def fit_day(conn, obs_date: str, lam: float | None = None):
@@ -226,13 +269,66 @@ def _store(conn, summary, rows) -> None:
          for source, point, observed, fitted, weight in rows])
 
 
+# A trade check older than this is not lag, it is a fault. The newest curve
+# day legitimately has none — the trade file arrives the morning after the
+# quote sheet — and a weekend adds two more, so three days is the edge of
+# normal and anything beyond it wants explaining.
+STALE_CHECK_DAYS = 3
+
+
+def trade_check_age(conn, obs_date: str) -> dict | None:
+    """The most recent day whose curve was checked against executed trades.
+
+    Returned with its age, so a surface can say "checked against 12 trades
+    on 2026-09-16" rather than printing a number with no date on it. When
+    this goes stale the model loses its only out-of-sample reality check,
+    and it does so invisibly: the last time, it stayed stale for four days
+    while executed levels drifted 30bp away from the quoted screen.
+    """
+    row = conn.execute(
+        """SELECT obs_date, n_trades, trade_bias_bp, trade_rmse_bp FROM curve_fits
+            WHERE trade_bias_bp IS NOT NULL AND obs_date <= ?
+            ORDER BY obs_date DESC LIMIT 1""", (obs_date,)).fetchone()
+    if not row:
+        return None
+    age = (dt.date.fromisoformat(obs_date) - dt.date.fromisoformat(row["obs_date"])).days
+    return {"obs_date": row["obs_date"], "days_old": age,
+            "n_trades": row["n_trades"], "bias_bp": row["trade_bias_bp"],
+            "rmse_bp": row["trade_rmse_bp"], "stale": age > STALE_CHECK_DAYS}
+
+
+def dates_with_late_trades(conn) -> set:
+    """Fitted days whose executed trades landed after the curve was fitted.
+
+    The trade summary for a day is published AFTER that day's quote sheet —
+    usually the next morning — so a curve fitted the evening the quotes
+    appear has nothing to check itself against. Only unfitted days were ever
+    revisited, so those trades were dropped for good rather than late.
+
+    That is not hypothetical. Between 2026-09-11 and 2026-09-16 the PDMO's
+    trade file began arriving a day later than it had been, and four
+    consecutive days were fitted with zero trades. The out-of-sample check
+    switched itself off silently, and it did so exactly when it was most
+    needed: those 55 unseen trades printed a mean 32.5bp CHEAP to the curve,
+    which is the largest divergence in the sample.
+
+    The comparison is against `load_trades`, so a day whose trades are all
+    legitimately unusable settles at its stored count and is not refitted
+    again on every run.
+    """
+    return {row["obs_date"] for row in conn.execute(
+        "SELECT obs_date, n_trades FROM curve_fits")
+        if len(load_trades(conn, row["obs_date"])) != (row["n_trades"] or 0)}
+
+
 def available_dates(conn, only_new: bool):
     dates = [row["obs_date"] for row in conn.execute(
         """SELECT DISTINCT obs_date FROM observations
             WHERE source='pdmo_daily' AND mid_yield IS NOT NULL ORDER BY obs_date""")]
     if only_new:
         done = {row["obs_date"] for row in conn.execute("SELECT obs_date FROM curve_fits")}
-        dates = [d for d in dates if d not in done]
+        catch_up = dates_with_late_trades(conn)
+        dates = [d for d in dates if d not in done or d in catch_up]
     return dates
 
 
@@ -255,6 +351,7 @@ def main() -> None:
     conn = db.connect()
     if args.calibrate:
         lam = calibrate_lambda(conn, available_dates(conn, only_new=False))
+        store_lambda(conn, lam)
         print(f"calibrated lambda = {lam:.3f} years; refitting every day")
         args.all = True
     dates = [args.date] if args.date else available_dates(conn, only_new=not args.all)

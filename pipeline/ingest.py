@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from string import ascii_uppercase
 
 from pipeline import (config, db, fetch, isin, parse_auction, parse_daily,
-                      parse_trade_summary, scrape_index)
+                      parse_trade_summary, scrape_index, series)
 from pipeline.parse_daily import ParseError
 
 log = logging.getLogger(__name__)
@@ -37,29 +37,47 @@ class WorkItem:
     index_year: int  # which index page listed it (also the cache subfolder)
 
 
+# Every index page, with the parser that reads it. One table rather than four
+# near-identical loops, so adding a section is one line.
+INDEX_SOURCES = [
+    ("daily", config.PDMO_INDEX_URLS, scrape_index.parse_daily_index),
+    ("trade-summary", config.TRADE_SUMMARY_INDEX_URLS, scrape_index.parse_trade_summary_index),
+    ("bond-issuance", config.BOND_ISSUANCE_INDEX_URLS, scrape_index.parse_issuance_index),
+    ("bond-auction", config.BOND_AUCTION_INDEX_URLS, scrape_index.parse_auction_index),
+]
+
+
 def build_worklist() -> list[WorkItem]:
-    """Fetch every index page and return all files, in ingest order."""
+    """Fetch every index page and return all files, in ingest order.
+
+    One index page timing out no longer ends the run. The PDMO site was
+    unreachable for a few minutes on 2026-09-13 and the whole job died on
+    it — including the curve, signals and dashboard steps, which need no
+    network at all and had a perfectly good database to work from. Ingest
+    is idempotent, so anything missed is simply picked up tomorrow.
+
+    If EVERY index fails it is an outage rather than a blip, and that does
+    raise: continuing would quietly report success having fetched nothing.
+    """
     items: list[WorkItem] = []
-    for year, url in sorted(config.PDMO_INDEX_URLS.items()):
-        html = fetch.polite_get(url).content
-        entries = scrape_index.parse_daily_index(html)
-        log.info("daily index %s: %d files", year, len(entries))
-        items += [WorkItem(entry, year) for entry in entries]
-    for year, url in sorted(config.TRADE_SUMMARY_INDEX_URLS.items()):
-        html = fetch.polite_get(url).content
-        entries = scrape_index.parse_trade_summary_index(html)
-        log.info("trade-summary index %s: %d files", year, len(entries))
-        items += [WorkItem(entry, year) for entry in entries]
-    for year, url in sorted(config.BOND_ISSUANCE_INDEX_URLS.items()):
-        html = fetch.polite_get(url).content
-        entries = scrape_index.parse_issuance_index(html)
-        log.info("bond-issuance index %s: %d English announcements", year, len(entries))
-        items += [WorkItem(entry, year) for entry in entries]
-    for year, url in sorted(config.BOND_AUCTION_INDEX_URLS.items()):
-        html = fetch.polite_get(url).content
-        entries = scrape_index.parse_auction_index(html)
-        log.info("bond-auction index %s: %d English releases", year, len(entries))
-        items += [WorkItem(entry, year) for entry in entries]
+    attempted = failed = 0
+    for label, urls, parse in INDEX_SOURCES:
+        for year, url in sorted(urls.items()):
+            attempted += 1
+            try:
+                entries = parse(fetch.polite_get(url).content)
+            except Exception as error:            # noqa: BLE001 - logged and survived
+                failed += 1
+                log.warning("%s index %s unreachable, skipping: %s", label, year, error)
+                continue
+            log.info("%s index %s: %d files", label, year, len(entries))
+            items += [WorkItem(entry, year) for entry in entries]
+    if attempted and failed == attempted:
+        raise RuntimeError(
+            f"all {attempted} index pages unreachable — treasury.gov.lk looks down")
+    if failed:
+        log.warning("%d of %d index pages were skipped; the next run will "
+                    "pick up whatever they list", failed, attempted)
 
     # Announcements first, then auction results: between them they are the
     # only sources naming a series label next to its ISIN, and the daily
@@ -161,15 +179,44 @@ def _ingest_volumes(conn, item: WorkItem, path, raw_ref):
     return iso, f"{len(parsed.rows)} volume rows"
 
 
+# A quote wide enough to be administered rather than made. The restructuring
+# block is posted at a flat 13.00/12.00 every day, 100bp wide; genuine
+# two-way prices in this sheet run 18-30bp.
+MAX_SYNTHETIC_SPREAD_BP = 50.0
+
+
+def _admissible_without_isin(quote) -> bool:
+    """Whether a quote with no ISIN match is still a real, dealable price.
+
+    The unresolved rows are two very different things. Most are the 2023
+    restructuring block — step-coupon and sub-1% bonds posted at an
+    administered 13.00/12.00 every single day — which belongs nowhere near a
+    curve. The rest are ordinary single-coupon bonds quoted 18-30bp wide
+    that simply predate every auction release in the archive. Dropping the
+    second group cost the curve its entire long end.
+    """
+    if len(series.coupon_steps(quote["series_label"])) != 1:
+        return False                       # step-coupon: not one yield axis
+    bid, offer = quote["bid_yield"], quote["offer_yield"]
+    if bid is None or offer is None:
+        return False                       # one-way: no price to believe
+    return 0.0 < (bid - offer) * 100.0 <= MAX_SYNTHETIC_SPREAD_BP
+
+
 def _ingest_daily_summary(conn, item: WorkItem, path, raw_ref):
     parsed = parse_daily.parse_daily_summary(path)
     iso = parsed.reporting_date.isoformat()
     db.clear_quotes(conn, raw_ref)  # see the note in _ingest_volumes
     lookup = _bond_lookup(conn)
     matched = unmatched = 0
-    how = {"label": 0, "label-no-letter": 0, "maturity+coupon": 0}
+    how = {"label": 0, "label-no-letter": 0, "maturity+coupon": 0, "synthetic": 0}
     for quote in parsed.quotes:
         matched_isin, method = _resolve_isin(lookup, quote)
+        if matched_isin is None and _admissible_without_isin(quote):
+            # A real two-way price in a bond no release names. Keyed on its
+            # own cash flows so the curve can use it; see isin.synthetic_key.
+            matched_isin, method = isin.synthetic_key(
+                quote["coupon_pct"], quote["maturity_date"]), "synthetic"
         if matched_isin is None:
             unmatched += 1
             continue
@@ -183,8 +230,8 @@ def _ingest_daily_summary(conn, item: WorkItem, path, raw_ref):
                         quote["bid_price"], quote["offer_price"], raw_ref)
         matched += 1
     note = (f"{matched} quotes ({how['label'] + how['label-no-letter']} by label, "
-            f"{how['maturity+coupon']} by maturity; "
-            f"{unmatched} unresolved)")
+            f"{how['maturity+coupon']} by maturity, {how['synthetic']} by cash flow; "
+            f"{unmatched} administered or one-way, left out)")
     if matched == 0:
         raise ParseError("no quote row matched a known bond — " + note)
     return iso, note

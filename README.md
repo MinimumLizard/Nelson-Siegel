@@ -21,9 +21,9 @@ Three report families are ingested (details and quirks in
 | Treasury Bond issuance announcements | PDF | ISIN, series label, **date of issue, coupon payment dates, accrued interest**, amount offered — and which bonds are currently being auctioned |
 
 The archive reaches back to **1 Dec 2025** (the site publishes nothing older
-under these sections). A full backfill on 2026-08-31 ingested **542 files**
-with zero parse failures: 49 bonds, 8,069 daily observations and 2,727
-executed-trade rows spanning 2025-12-01 to 2026-08-31.
+under these sections). A full backfill on 2026-09-18 ingested **631 files**
+with zero parse failures: 59 bonds, 9,800 daily observations and 3,000
+executed-trade rows spanning 2025-12-01 to 2026-09-18.
 
 ### One known gap
 
@@ -39,11 +39,20 @@ The rest cannot be identified from any published source. Their ISINs cannot
 be synthesised either: the quote sheet's tenor column agrees with the tenor
 encoded in real ISINs only 33 times out of 44, so a quarter of synthesised
 ISINs would be wrong, and a wrong ISIN silently attributes one bond's
-history to another. The pipeline refuses to guess; each file's `parse_note`
-records the split so the gap is visible rather than hidden.
+history to another.
 
-45 bonds spanning roughly 1 to 13 years is ample for curve fitting, so this
-limits breadth, not curve quality.
+They are still priced, though, and throwing them away cost the curve its
+entire long end. So a bond the releases never name, but which carries a real
+two-way quote (single coupon, 18–30bp wide), is keyed on **its own cash
+flows** instead — `SYN:<maturity>:<coupon>`, a form that cannot be mistaken
+for an ISIN. A wrong key there can only split one bond into two, never merge
+two into one, and a split loses history where a merge corrupts it.
+
+That admits 8 bonds a day and takes the curve from **45 bonds ending at 12.9
+years to 53 ending at 18.4**, at a cost of 0.1bp in fit. The 38 rows still
+left out are the 2023 restructuring block — step-coupon and sub-1% bonds
+posted at an administered 13.00/12.00 every day, 100bp wide. Each file's
+`parse_note` records the split, so what is in and what is out stays visible.
 
 ## The data updates itself
 
@@ -208,9 +217,8 @@ nor past 10 years, so a trade-fitted curve would extrapolate at both ends
 and lurch as the traded set changed — which a residual signal would read
 as bonds turning rich and cheap overnight. Trades are instead compared
 against the finished curve, giving an out-of-sample error (median 20.5bp)
-and a measured quote-to-trade gap each day. That gap averages +22bp but
-has a standard deviation of 26bp and goes negative on 18 of 180 days, so
-it is genuinely daily information rather than a constant to subtract.
+and a measured quote-to-trade gap each day — see "Where trades actually
+print" below, because that gap turns out to move far more than it looks.
 
 **Lambda is calibrated once over the whole sample (2.82 years) and then
 held fixed**, rather than refitted daily. Refitting it daily fits 0.2bp
@@ -218,11 +226,26 @@ better and costs far more than that: it pinned lambda at the top of the
 search range on 29% of days, where the slope and curvature factors go
 nearly collinear over the maturities actually observed, swinging the
 "long-run level" beta0 between 2.4% and 14.6% and moving it by up to
-6.9pp overnight. Held fixed, beta0 stays within 11.9–13.7% and moves at
-most 0.5pp a day, so the three parameters mean the same thing on every
-date — which is what a residual-based signal needs.
+6.9pp overnight.
 
-Typical fit quality: **10.8bp** weighted RMSE across 40–42 bonds a day.
+The same argument decides *which* fixed lambda. The error-minimising value
+on the current cross-section is 4.72y, and it is not the one used, because
+minimum error is the wrong objective here:
+
+| lambda | median RMSE | beta0 range | largest 1-day move |
+|---|---|---|---|
+| **2.82y** (used) | 9.74bp | 11.81–14.37 | 0.87pp |
+| 4.00y | 9.71bp | 11.47–14.99 | 1.44pp |
+| 4.72y (grid min) | 9.62bp | 11.15–15.30 | 1.83pp |
+
+Paying a percentage point of parameter stability for a tenth of a basis
+point is a bad trade when the whole purpose of a fixed lambda is that beta
+means the same thing on every date. `calibrate_lambda` therefore takes the
+**smallest** lambda whose pooled error is within 2% of the best — which on
+this sample independently returns 2.82y, the value chosen back when the
+curve stopped at 13 years.
+
+Typical fit quality: **9.7bp** median weighted RMSE across 53 bonds a day.
 
 ## The signals
 
@@ -297,6 +320,86 @@ week after its auction is closer to normal than the number alone suggests.
 On 44 events across 15 auction dates this is **suggestive, not
 established**, and 6bp sits below a typical 16bp bid-offer — it is
 context for a decision, not a trade on its own.
+
+### Where trades actually print
+
+Nobody deals at a quote mid, and the gap between the screen and an executed
+trade is not a constant to subtract. Over 2,077 bond-days that both quoted
+and traded, the monthly median gap ran:
+
+| | | | |
+|---|---|---|---|
+| 2026-02 | +0.8bp | 2026-06 | **+51.9bp** |
+| 2026-03 | +15.2bp | 2026-08 | −3.6bp |
+| 2026-05 | +20.6bp | 2026-09 | −6.6bp |
+
+Early June printed +100 to +134bp market-wide, across 25 of the 31 bonds
+that traded, decaying over a fortnight — dealer screens lagging a fast move.
+Right now the gap is **negative**, so the whole-sample average of about
++16bp is not merely imprecise, it has the wrong sign for this regime.
+
+The estimate is therefore taken over a **20-day trailing window**, chosen by
+out-of-sample error on predicting each day's realised gap:
+
+| window | mean abs error |
+|---|---|
+| all history | 18.1bp |
+| 120 days | 18.0bp |
+| 60 days | 16.5bp |
+| **20 days** | **13.0bp** |
+
+It is **not** bucketed by tenor, though the whole-sample split looks
+convincing (+17.6bp at 0−2y against +8.3bp at 7−10y). Bucketing loses out of
+sample: predicting a bucket's next-quarter gap from its own past gives
+10.9bp of mean absolute error against 9.2bp for the blended past. The
+market-wide level swings by 50bp while the tenor spread is worth about 9bp,
+so slicing adds more estimation noise than the structure removes — and the
+front-end-is-wider ordering itself reversed in one of the four quarters.
+`python -m signals.validate` prints both tables.
+
+The gap does **not** bias a z-score: each bond is measured against its own
+trailing mean, so any offset that is stable for that bond divides out. What
+it does change is the yield you actually buy at, which is where carry
+starts.
+
+## Carry
+
+The relative-value signal asks whether a bond is mispriced against the
+curve. For a book that buys bonds with borrowed money and holds them, the
+first question is instead what the position earns just by existing:
+
+* **carry** — the bond's yield less the cost of funding it
+* **rolldown** — the price gain as the bond ages down a sloped curve, with
+  the curve itself unchanged
+
+Both are known at the outset, unlike a reversion that may not arrive. On the
+core book they range over 147bp while the whole spread of relative-value
+dislocations is 19bp, so on that comparison carry does about eight times the
+work.
+
+**But ranking on carry is a trap, and the number says so.** Across the same
+book, carry plus rolldown correlates **+0.995 with duration** — "buy the
+most carry" means "buy the longest bond", which is a view on the curve
+rather than a choice between bonds. Divide by duration and the ordering
+reverses (−0.98). The report therefore leads with **carry per year of
+duration**, and on 2026-09-02 that column reads 46 to 50bp across all nine
+core bonds: the curve is charging about the same for every year of risk on
+it, and duration-adjusted carry does not discriminate between them today.
+
+Funding is the **12-month Treasury bill plus 5bp**, taken from executed bill
+trades in this same data (`security_type='Tbill'`, ISINs decoded by
+`pipeline/isin.py`). Bills near the one-year point print on about half of
+all days and usually one at a time, so prints are volume-weighted over a
+short trailing window rather than taken from the latest day alone. Nothing
+uses a rate from after the day being scored.
+
+**Tax is not modelled.** Coupon income and price accretion are usually taxed
+differently, and the split does vary here — the 2037 at 92.8 earns 97% of
+its return as coupon, the 11.00%2030A at 101.5 earns 104% and gives some
+back in price. But the whole core book sits within about 8 points of par, so
+a 10-point wedge between the two rates moves the ranking by roughly 3bp a
+year, which is inside the noise on everything else. It is left out rather
+than guessed at.
 
 ### Does it work?
 

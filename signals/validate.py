@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline import db
+from signals import execution
 
 HORIZONS = (5, 10, 20)
 BUCKETS = [-np.inf, -3, -2, -1, 1, 2, 3, np.inf]
@@ -100,6 +101,45 @@ def auction_cycle(conn) -> None:
     print("  (positive = cheaper than this bond's own recent norm)")
 
 
+def execution_gap(conn) -> None:
+    """How far executed trades print from the dealers' quote screen.
+
+    Two ways of slicing it. By MONTH the gap swings enormously, which is the
+    finding: a single blended number cannot describe a quantity that ran
+    +52bp in June and is negative now. By TENOR it looks structured on the
+    whole sample, but that structure does not survive out of sample (see
+    `signals/execution.py`), which is why nothing here is bucketed by tenor.
+    """
+    rows = pd.read_sql_query(
+        """SELECT q.obs_date, q.tau_years AS tau,
+                  (t.observed_yield - q.observed_yield) * 100.0 AS gap_bp
+             FROM curve_residuals q
+             JOIN curve_residuals t ON t.obs_date = q.obs_date
+              AND t.isin = q.isin AND t.source = 'trade'
+            WHERE q.source = 'quote'""", conn)
+    if rows.empty:
+        return
+    rows["obs_date"] = pd.to_datetime(rows["obs_date"])
+    print(f"\nQUOTE-TO-TRADE GAP: executed yield less the quoted mid, bp"
+          f"\n  {len(rows)} bond-days that both quoted and traded"
+          f"\n  (positive = trades print cheaper than the screen)")
+
+    print(f"\n  by month{'median':>12}{'iqr':>20}{'n':>8}")
+    for month, group in rows.groupby(rows["obs_date"].dt.to_period("M")):
+        span = f"{group.gap_bp.quantile(.25):+.0f} to {group.gap_bp.quantile(.75):+.0f}"
+        print(f"  {str(month):<8}{group.gap_bp.median():>+12.1f}{span:>20}{len(group):>8}")
+
+    print(f"\n  by tenor (diagnostic only — not used to adjust any bond)")
+    print(f"  {'bucket':<8}{'median':>12}{'n':>8}")
+    for low, high, label in execution.BUCKETS:
+        subset = rows[(rows.tau >= low) & (rows.tau < high)]
+        if len(subset):
+            print(f"  {label:<8}{subset.gap_bp.median():>+12.1f}{len(subset):>8}")
+    print("  the tenor split loses out of sample (10.9bp mean abs error against "
+          "9.2bp\n  for the blended past), so the estimate stays blended and the "
+          f"window\n  short: {execution.WINDOW_DAYS} days, chosen the same way.")
+
+
 def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     conn = db.connect()
@@ -126,6 +166,7 @@ def main() -> None:
                 "SWITCH PAIRS: mean change in the pair spread (bp) after the signal")
 
     auction_cycle(conn)
+    execution_gap(conn)
 
     print("\nOne 9-month sample, one regime, in-sample throughout: evidence that the "
           "residuals mean-revert,\nnot a forecast of what a strategy would earn. "
