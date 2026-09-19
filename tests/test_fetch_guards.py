@@ -8,11 +8,11 @@ parser, yield no rows, and let a run report success having fetched nothing.
 """
 
 import datetime as dt
+from pathlib import Path
 
 import pytest
 import requests
 
-from dashboard import build
 from pipeline import fetch, ingest
 
 
@@ -83,10 +83,14 @@ def test_one_empty_index_is_survivable(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Saying a day has no trades without saying when they arrive reads as a fault
+# The page must not promise a publication date the PDMO has already moved
 # ---------------------------------------------------------------------------
 
-def test_friday_trades_are_due_on_monday():
-    assert build._next_business_day("2026-09-18") == dt.date(2026, 9, 21)   # Fri -> Mon
-    assert build._next_business_day("2026-09-17") == dt.date(2026, 9, 18)   # Thu -> Fri
-    assert build._next_business_day("2026-09-19") == dt.date(2026, 9, 21)   # Sat -> Mon
+def test_the_page_states_trades_are_pending_without_naming_a_date():
+    """An earlier version said "published on Mon 21 Sep", derived from a
+    next-business-day rule. The lag is not a rule: through 2026-09-10 a day's
+    trades appeared the same evening, and from 2026-09-11 the next day. A rule
+    that has already been wrong once should not be printed as a promise."""
+    source = Path("dashboard/build.py").read_text()
+    assert "are not published yet" in source
+    assert "_next_business_day" not in source

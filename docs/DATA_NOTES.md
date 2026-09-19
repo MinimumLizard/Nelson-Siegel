@@ -667,3 +667,41 @@ Two guards:
 * `build_worklist` counts an index that parses to ZERO entries as a failure,
   not as "no news". One empty index is survivable, because a year that has
   not started yet legitimately lists nothing; every index empty raises.
+
+
+## How late is the trade file, really?
+
+This was asserted before it was measured, and the assertion was wrong.
+Restricting to files the daily runs caught fresh (so excluding the initial
+2026-08-31 backfill, which makes every historical file look 120+ days late):
+
+    covers        weekday   first seen by the pipeline    lag
+    2026-09-02    Wed       2026-09-02 22:14              0d
+    2026-09-04    Fri       2026-09-04 22:00              0d
+    2026-09-09    Wed       2026-09-09 22:09              0d
+    2026-09-10    Thu       2026-09-10 22:10              0d
+    2026-09-11    Fri       2026-09-14 22:54              3d
+    2026-09-14    Mon       2026-09-15 22:37              1d
+    2026-09-15    Tue       2026-09-16 22:33              1d
+
+Two things, only one of which was noticed at the time.
+
+**The lag changed.** Through 2026-09-10 a day's trades were published the
+same evening, in time for that night's run. From 2026-09-14 they arrive the
+next day. That shift is what silently killed the out-of-sample check, and
+`dates_with_late_trades` now absorbs it.
+
+**Friday is not established as a three-day wait.** The claim came from one
+observation, 2026-09-11, and it is confounded: the Saturday run at 21:52 UTC
+did not have the file and the Sunday run FAILED on a connection timeout, so
+the file could have appeared on either Saturday or Sunday and gone unseen
+until Monday. The only other Friday in the sample, 2026-09-04, published
+same-day under the old regime. No Friday has yet been observed under the
+new one.
+
+The dashboard therefore no longer prints a predicted publication date. It
+said "published on Mon 21 Sep", derived from a next-business-day rule — a
+rule invented from a single confounded data point, about a schedule the
+PDMO has already changed once. It now says only that the trades are pending
+and the next run will collect them, which is true whatever the lag turns
+out to be.
