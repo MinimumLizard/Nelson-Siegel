@@ -196,7 +196,7 @@ def show(conn, obs_date: str, top: int) -> None:
         print("  none today: no current benchmark cleared the trading floor of "
               f"{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS}")
     if any(facts.get(row["isin"], {}).get("post_auction") for row in core):
-        print("\n  * still inside the post-auction window: over the 15 auctions in "
+        print("\n  * still inside the post-auction window: over the 16 auctions in "
               "this data\n    bonds sat about 5bp cheap to their own norm for a "
               "fortnight afterwards.")
     _building(conn, obs_date, facts)
