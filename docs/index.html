@@ -155,7 +155,7 @@ tr:last-child td { border-bottom: none; }
      the last 60 · <b>auction</b> is days since this bond
      was last sold, <span class="hot">highlighted</span> inside the
      14-day window in which freshly auctioned paper
-     has sat about 6bp cheap to its own norm · <b>cover</b> is bids over the
+     has sat about 5bp cheap to its own norm · <b>cover</b> is bids over the
      amount offered at that auction, so how much demand the last supply met.</p>
   
 
@@ -178,7 +178,7 @@ tr:last-child td { border-bottom: none; }
   <div class="card"><table><thead><tr>
     <th>buy</th><th>sell</th><th>gap bp</th><th>z</th><th>cost bp</th>
     <th>expected bp</th><th>verdict</th></tr></thead>
-    <tbody><tr><td>11.60%2031A</td><td>11.00%2030B</td><td>5.4</td><td>+2.1</td><td>15</td><td>5.8</td><td><span class="badge"><i style="background:var(--warning)"></i>below costs</span></td></tr><tr><td>11.60%2031A</td><td>11.00%2030A</td><td>9.6</td><td>+1.5</td><td>15</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.60%2031A</td><td>10.00%2030A</td><td>2.6</td><td>-1.1</td><td>15</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>10.75%2037A</td><td>11.00%2030A</td><td>10.8</td><td>+1.0</td><td>19</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.50%2032A</td><td>10.00%2030A</td><td>5.8</td><td>-0.9</td><td>16</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>10.85%2036A</td><td>11.00%2030A</td><td>11.3</td><td>+0.9</td><td>18</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.20%2033</td><td>11.00%2030A</td><td>9.0</td><td>-0.9</td><td>17</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.50%2032A</td><td>11.00%2030A</td><td>8.8</td><td>+0.9</td><td>16</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr></tbody></table></div>
+    <tbody><tr><td>11.60%2031A</td><td>11.00%2030B</td><td>5.4</td><td>+2.1</td><td>15</td><td>6.9</td><td><span class="badge"><i style="background:var(--warning)"></i>below costs</span></td></tr><tr><td>11.60%2031A</td><td>11.00%2030A</td><td>9.6</td><td>+1.5</td><td>15</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.60%2031A</td><td>10.00%2030A</td><td>2.6</td><td>-1.1</td><td>15</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>10.75%2037A</td><td>11.00%2030A</td><td>10.8</td><td>+1.0</td><td>19</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.50%2032A</td><td>10.00%2030A</td><td>5.8</td><td>-0.9</td><td>16</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>10.85%2036A</td><td>11.00%2030A</td><td>11.3</td><td>+0.9</td><td>18</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.20%2033</td><td>11.00%2030A</td><td>9.0</td><td>-0.9</td><td>17</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr><tr><td>11.50%2032A</td><td>11.00%2030A</td><td>8.8</td><td>+0.9</td><td>16</td><td>0.0</td><td><span class="badge"><i style="background:var(--warning)"></i>weak signal</span></td></tr></tbody></table></div>
   <p class="foot"><b>gap</b> is distance from the pair's own recent norm ·
      <b>z</b> is that in its own standard deviations · <b>cost</b> is half the
      bid-offer on each leg · <b>expected</b> is what a signal this size has
@@ -189,7 +189,7 @@ tr:last-child td { border-bottom: none; }
   <p class="foot">A bond's raw distance from the curve is not a signal: some
      bonds sit permanently cheap. Each is scored against <b>its own</b> trailing
      60-day window, which excludes the day being scored. Measured over this
-     sample the residuals mean-revert with a half-life near 11 days; run
+     sample the residuals mean-revert with a half-life near 6 days; run
      <code>python -m signals.validate</code> for the current numbers. One
      9-month sample in one regime — evidence the mechanism works, not a
      forecast of what it pays.</p>

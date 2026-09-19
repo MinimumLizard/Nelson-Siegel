@@ -83,9 +83,46 @@ def test_switch_spread_and_sign():
 
 
 def test_expected_capture_is_stepped_by_z():
-    assert signal_report._expected_capture(0.5) == 0.0
-    assert signal_report._expected_capture(-2.5) == signal_report.EXPECTED_REVERSION_BP[2.0]
-    assert signal_report._expected_capture(4.0) == signal_report.EXPECTED_REVERSION_BP[3.0]
+    table = {2.0: 6.9, 3.0: 13.4}
+    assert signal_report._expected_capture(0.5, table) == 0.0
+    assert signal_report._expected_capture(-2.5, table) == 6.9
+    assert signal_report._expected_capture(4.0, table) == 13.4
+
+
+def test_capture_is_unknown_rather_than_zero_before_it_is_measured():
+    """An unmeasured capture must not masquerade as a measured zero: that
+    would label every candidate a weak signal and look like a finding."""
+    assert signal_report._expected_capture(4.0, {}) is None
+
+
+def test_the_reversion_figures_come_from_the_stored_signals(tmp_path):
+    """They used to be two numbers pasted into the source. Measured on a
+    45-bond curve, still printed after it grew to 53, and out by enough at
+    |z|>3 to flip a verdict. They are now recomputed on every rebuild."""
+    conn = db.connect(tmp_path / "rev.sqlite")
+    # One pair whose spread reliably comes back after a large reading. Every
+    # third day spikes, so there are enough extreme readings to quote at all
+    # (measure_reversion refuses to report a threshold under 30 of them).
+    for index in range(120):
+        day = (pd.Timestamp("2026-01-01") + pd.tseries.offsets.BDay(index)).date().isoformat()
+        spread = 50.0 if index % 3 == 0 else 0.0
+        conn.execute(
+            """INSERT INTO switch_signals (obs_date, isin_a, isin_b, tau_a, tau_b,
+                   spread_bp, mean_bp, sd_bp, dislocation_bp, zscore, n_window)
+               VALUES (?, 'A', 'B', 2.0, 3.0, ?, 0.0, 10.0, ?, ?, 60)""",
+            (day, spread, spread, spread / 10.0))
+    conn.commit()
+    switches = pd.read_sql_query("SELECT * FROM switch_signals", conn)
+    switches["obs_date"] = pd.to_datetime(switches["obs_date"])
+    stored = signal_run.measure_reversion(conn, switches)
+    conn.commit()
+
+    assert "switch_reversion_10d_z2" in stored
+    saved = db.signal_stats(conn)["switch_reversion_10d_z2"]
+    assert saved["value"] == pytest.approx(stored["switch_reversion_10d_z2"])
+    assert saved["n"] > 0 and saved["measured_at"]
+    # A spread that spikes to +50 and falls back must read as positive capture.
+    assert saved["value"] > 0
 
 
 def test_rebuild_is_idempotent(tmp_path):
@@ -172,7 +209,7 @@ def test_tiers_separate_the_core_book_from_the_rest(tmp_path):
 
 def test_auction_cycle_is_measured_from_the_scoring_date(tmp_path):
     """`post_auction` marks the fortnight after an auction, in which this
-    sample's bonds sat about 6bp cheap to their own norm. It must be judged as
+    sample's bonds sat about 5bp cheap to their own norm. It must be judged as
     of the day being scored, not as of today."""
     from signals import liquidity
     conn = db.connect(tmp_path / "liq.sqlite")

@@ -101,6 +101,51 @@ def auction_cycle(conn) -> None:
     print("  (positive = cheaper than this bond's own recent norm)")
 
 
+def dispersion(conn) -> None:
+    """The figures the README quotes for WHY a z-score is used at all.
+
+    They live here, not in prose, because every one of them moved when the
+    curve gained its long end: the cross-sectional spread fell from 41.6bp to
+    about 11bp as the fit improved, and the residual half-life roughly halved.
+    A number pasted into a document is a number that will be wrong later, so
+    the document should cite this command instead of repeating it.
+    """
+    residuals = pd.read_sql_query(
+        "SELECT obs_date, isin, residual_bp FROM curve_residuals WHERE source='quote'",
+        conn)
+    if residuals.empty:
+        return
+    across = residuals.groupby("obs_date").residual_bp.std().mean()
+    own = residuals.groupby("isin").residual_bp.std().mean()
+
+    # AR(1) per bond on its own residual series, then averaged. Gaps are left
+    # as-is: consecutive ROWS are consecutive trading days for a bond that
+    # quotes daily, which these do.
+    coefficients = []
+    for _, group in residuals.sort_values("obs_date").groupby("isin"):
+        values = group.residual_bp.values
+        if len(values) > 40 and values.std() > 0:
+            coefficients.append(np.corrcoef(values[:-1], values[1:])[0, 1])
+    rho = float(np.mean(coefficients)) if coefficients else float("nan")
+    half_life = np.log(0.5) / np.log(rho) if 0 < rho < 1 else float("nan")
+
+    spreads = pd.read_sql_query(
+        """SELECT (bid_yield - offer_yield) * 100 AS s FROM observations
+            WHERE source='pdmo_daily' AND bid_yield IS NOT NULL
+              AND offer_yield IS NOT NULL""", conn)
+    fits = pd.read_sql_query("SELECT rmse_bp, n_quotes FROM curve_fits", conn)
+
+    print("\nDISPERSION: why each bond is scored against its OWN history")
+    print(f"  residual spread ACROSS bonds, within a day   {across:>6.1f}bp")
+    print(f"  a bond's OWN residual, standard deviation    {own:>6.1f}bp")
+    print(f"  ratio                                        {across / own:>6.1f}x")
+    print(f"  residual AR(1) {rho:.2f}, half-life {half_life:.1f} days "
+          f"(over {len(coefficients)} bonds)")
+    print(f"  median quoted bid-offer                      {spreads.s.median():>6.0f}bp")
+    print(f"  median weighted fit RMSE                     {fits.rmse_bp.median():>6.1f}bp"
+          f"  over {fits.n_quotes.median():.0f} bonds")
+
+
 def execution_gap(conn) -> None:
     """How far executed trades print from the dealers' quote screen.
 
@@ -165,6 +210,7 @@ def main() -> None:
         _report(_forward_changes(switches, "pair", "spread_bp"),
                 "SWITCH PAIRS: mean change in the pair spread (bp) after the signal")
 
+    dispersion(conn)
     auction_cycle(conn)
     execution_gap(conn)
 
