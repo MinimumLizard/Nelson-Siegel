@@ -399,20 +399,6 @@ def _core_rows(core, spreads, facts, money=None) -> str:
     return "".join(out)
 
 
-def _next_business_day(obs_date: str) -> dt.date:
-    """When the trade file covering `obs_date` is due.
-
-    The PDMO publishes a day's executed trades on the NEXT business day, so
-    the newest curve legitimately has none. Saying that without saying when
-    they arrive reads like a fault — particularly on a Friday, where the
-    wait is three days rather than one.
-    """
-    day = dt.date.fromisoformat(obs_date) + dt.timedelta(days=1)
-    while day.weekday() >= 5:                      # Saturday, Sunday
-        day += dt.timedelta(days=1)
-    return day
-
-
 def _waiting_note(waiting) -> str:
     """One line naming tradeable bonds that cannot be scored yet."""
     if not waiting:
@@ -529,12 +515,17 @@ def render(data, fragment: bool = False) -> str:
         f'<p class="empty">No current benchmark cleared the trading floor of '
         f'{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS} '
         f'today.</p>')
-    due = _next_business_day(data["obs_date"])
+    # Deliberately no promised date. The publication lag is not a fixed rule:
+    # through 2026-09-10 a day's trades appeared the same evening, and from
+    # 2026-09-11 they began arriving the next day instead. That shift is what
+    # silently killed the out-of-sample check, so the page states what is true
+    # (these are pending, and the next run will collect them) rather than a
+    # calendar date the PDMO has already moved once.
     trade_key = ('<span><i style="background:var(--series-2)"></i>executed trades, '
                  'held out of the fit</span>' if has_trades else
                  f'<span class="muted-key">executed trades for {data["obs_date"]} '
-                 f'are published on {due:%a %-d %b} — this day is quotes only '
-                 f'so far</span>')
+                 f'are not published yet — they arrive a day or so later and the '
+                 f'next run picks them up</span>')
     body = f"""<div id="tip"></div>
 <div class="wrap">
   <h1>LKR government bond relative value</h1>
