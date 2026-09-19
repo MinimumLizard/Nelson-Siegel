@@ -149,6 +149,15 @@ treasury.gov.lk index pages ──> data/raw/YYYY/<uuid>.{xls,pdf}   (immutable 
   parses overwrite themselves cleanly.
 * A file that cannot be parsed is recorded as `parse_status='failed'` (with
   a one-line reason) in the `files` table and never stops a run.
+* The site sometimes answers with a firewall challenge (HTTP 307 and a
+  JavaScript page) rather than the report. `fetch.polite_get` refuses to
+  return that as content, and an index page that parses to **zero** entries
+  counts as a failure rather than as "no news" — a run must never report
+  success having quietly fetched nothing.
+* Traded volume is published twice, by two files, **two business days
+  apart**: the volumes file dates from a remaining-years column quoted to
+  T+2 settlement, the trade summary dates to the trade. Everything
+  downstream uses the trade summary; see `docs/DATA_NOTES.md`.
 
 ## Database schema
 
