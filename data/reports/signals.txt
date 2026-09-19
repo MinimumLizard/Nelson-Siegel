@@ -20,7 +20,7 @@ cheapest at the top, richest at the bottom
   11.00%2030A           -4.7    -5.5   -1.0    16    123   +87       74     5.6    17       99d   1.8x
 
   * still inside the post-auction window: over the 15 auctions in this data
-    bonds sat about 6bp cheap to their own norm for a fortnight afterwards.
+    bonds sat about 5bp cheap to their own norm for a fortnight afterwards.
 
 === ALSO TRADING — 13 liquid, but not on the run ===
 
@@ -40,7 +40,7 @@ rich to their own norm
 
 SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
   buy                 sell                     gap      z   cost    exp  verdict
-  11.60%2031A         11.00%2030B              5.4    2.1     15    5.8  below costs
+  11.60%2031A         11.00%2030B              5.4    2.1     15    6.9  below costs
   11.60%2031A         11.00%2030A              9.6    1.5     15    0.0  weak signal
   11.60%2031A         10.00%2030A              2.6   -1.1     15    0.0  weak signal
   10.75%2037A         11.00%2030A             10.8    1.0     19    0.0  weak signal

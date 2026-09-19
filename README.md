@@ -260,10 +260,17 @@ Typical fit quality: **9.7bp** median weighted RMSE across 53 bonds a day.
 
 A bond's raw distance from the curve is not a signal. Most of that
 variation is cross-sectional — some bonds simply sit persistently cheap and
-would flag every single day. Across bonds the residual spread is 41.6bp,
-while a typical bond's own residual moves with a standard deviation of just
-7.5bp. So each bond is scored against **its own** trailing 60-day window,
-which is the question a switch trade actually asks.
+would flag every single day. Measured now, the residual spread across bonds
+within a day is 11.0bp against 7.6bp for a typical bond's own residual, a
+ratio of 1.5x. So each bond is scored against **its own** trailing 60-day
+window, which is the question a switch trade actually asks.
+
+That ratio used to be quoted as 41.6bp against 7.5bp, and it is worth saying
+plainly that the case is weaker than that made it sound. The cross-sectional
+figure collapsed when the curve gained its long end and started fitting
+properly: a smaller residual is the fit doing its job. Demeaning each bond
+still helps, because a persistently cheap bond should not flag every day,
+but it is a 1.5x effect rather than a 5x one.
 
 **The window excludes the day being scored**, so no z-score has seen the
 value it scores and the stored history stays usable as a backtest.
@@ -316,8 +323,8 @@ with the history they do have, rather than silently dropped.
 Testing the 15 auctions in this data for the classic pre-auction concession
 found the **opposite** pattern. Bonds do not cheapen going in (+0.5bp on
 average over the ten days before, which is nothing); they cheapen **after**
-and stay cheap — about **+5.9bp** versus their own norm over the following
-fortnight, fading to +2.8bp by 15–30 days as the new supply is distributed.
+and stay cheap — about **+5.4bp** versus their own norm over the following
+fortnight, fading to +1.9bp by 15–30 days as the new supply is distributed.
 `python -m signals.validate` prints this table, so it can be re-checked as
 history grows.
 
@@ -326,7 +333,7 @@ So the reports mark `post_auction` for 14 days after a sale and show
 against where the bond sits in its cycle: a benchmark showing +5bp cheap a
 week after its auction is closer to normal than the number alone suggests.
 
-On 44 events across 15 auction dates this is **suggestive, not
+On 47 events across 16 auction dates this is **suggestive, not
 established**, and 6bp sits below a typical 16bp bid-offer — it is
 context for a decision, not a trade on its own.
 
@@ -413,14 +420,22 @@ than guessed at.
 ### Does it work?
 
 `python -m signals.validate` measures it. On this sample the residuals
-mean-revert with an **AR(1) of 0.94, a half-life of about 11 days**, and
+mean-revert with an **AR(1) of 0.89, a half-life of about 5.7 days**, and
 the relationship is monotone across every z bucket at 5, 10 and 20 days:
 
 | signal | 10-day capture | right direction |
 |---|---|---|
-| single bond, \|z\| > 2 | 4.1bp | 65% |
-| switch pair, \|z\| > 2 | 5.8bp | 66% |
-| switch pair, \|z\| > 3 | 11.7bp | — |
+| single bond, \|z\| > 2 | 5.6bp | 70% |
+| switch pair, \|z\| > 2 | 6.9bp | 69% |
+| switch pair, \|z\| > 3 | 13.4bp | 81% |
+
+**Every figure on this page is as of 2026-09-18 and moves when the model
+does.** They are printed by `python -m signals.validate`, which is the
+source; this table is a copy and copies go stale. The switch-pair numbers in
+particular are no longer pasted into the code — `signals.run` measures them
+on each rebuild and the report reads what it stored, because the previous
+hard-coded pair was measured on a 45-bond curve and was still being printed
+after the curve grew to 53.
 
 **Read those against costs before trading.** The median bid-offer is 16bp,
 so crossing both legs of a switch costs more than a \|z\|>2 signal has

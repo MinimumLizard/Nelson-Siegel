@@ -17,7 +17,7 @@ liquid benchmark is quoted continuously and barely moves.
 Every line puts the opportunity next to what it costs to take. The gap is
 how far a bond (or a pair) sits from its own recent norm; the cost is what
 crossing the bid-offer would take out of it. Over this sample a |z| above 2
-reverted about 6bp in ten days and above 3 about 12bp, while the median
+reverted about 7bp in ten days and above 3 about 13bp, while the median
 bond's bid-offer is 16bp — so most signals do NOT clear their own costs as
 a standalone trade, and the table says so rather than leaving it implied.
 """
@@ -28,9 +28,14 @@ from curves import fit as curve_fit
 from pipeline import db
 from signals import carry, execution, liquidity
 
-# Empirical, measured on this sample by `python -m signals.validate`:
-# mean absolute reversion of a pair spread over the following 10 days.
-EXPECTED_REVERSION_BP = {2.0: 5.8, 3.0: 11.7}
+# How far a pair spread has actually come back over the following 10 days,
+# per z threshold. NOT a constant: `signals.run` measures it from the stored
+# signals on every rebuild (see `measure_reversion`) and this reads what it
+# stored. The previous version was a pasted-in pair of numbers taken on a
+# 45-bond curve, still being printed after the curve grew to 53, understating
+# the capture by about 1bp at |z|>2 and 1.7bp at |z|>3 — enough to flip a
+# "below costs" verdict on a marginal candidate.
+REVERSION_THRESHOLDS = (3.0, 2.0)          # checked high to low
 
 # A quote wider than this is not a price you can deal on, so a "signal" in
 # it is not an opportunity. The widest quotes in this data run to several
@@ -38,12 +43,30 @@ EXPECTED_REVERSION_BP = {2.0: 5.8, 3.0: 11.7}
 MAX_TRADEABLE_SPREAD_BP = 50.0
 
 
-def _expected_capture(zscore: float) -> float:
+def reversion_table(conn) -> dict:
+    """{z threshold: measured 10-day capture, bp}, from the last rebuild.
+
+    Empty until `python -m signals.run` has measured it, in which case the
+    report says the capture is unmeasured rather than quietly calling every
+    candidate weak.
+    """
+    stats = db.signal_stats(conn)
+    table = {}
+    for threshold in REVERSION_THRESHOLDS:
+        row = stats.get(f"switch_reversion_10d_z{threshold:g}")
+        if row:
+            table[threshold] = row["value"]
+    return table
+
+
+def _expected_capture(zscore: float, table: dict) -> float | None:
+    """What a signal this size has historically returned, or None if unknown."""
+    if not table:
+        return None
     magnitude = abs(zscore)
-    if magnitude >= 3.0:
-        return EXPECTED_REVERSION_BP[3.0]
-    if magnitude >= 2.0:
-        return EXPECTED_REVERSION_BP[2.0]
+    for threshold in sorted(table, reverse=True):
+        if magnitude >= threshold:
+            return table[threshold]
     return 0.0
 
 
@@ -174,7 +197,7 @@ def show(conn, obs_date: str, top: int) -> None:
               f"{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS}")
     if any(facts.get(row["isin"], {}).get("post_auction") for row in core):
         print("\n  * still inside the post-auction window: over the 15 auctions in "
-              "this data\n    bonds sat about 6bp cheap to their own norm for a "
+              "this data\n    bonds sat about 5bp cheap to their own norm for a "
               "fortnight afterwards.")
     _building(conn, obs_date, facts)
 
@@ -184,6 +207,7 @@ def show(conn, obs_date: str, top: int) -> None:
 
     # Switches are restricted to two core legs. A pair is only a trade if you
     # can deal in BOTH sides, and the core book is where that is true.
+    reversion = reversion_table(conn)
     switches = [row for row in conn.execute(
         """SELECT s.*, ba.series_label AS label_a, bb.series_label AS label_b
              FROM switch_signals s
@@ -205,11 +229,15 @@ def show(conn, obs_date: str, top: int) -> None:
                 buy_isin, sell_isin = row["isin_b"], row["isin_a"]
             # Crossing the spread on both legs costs roughly half of each.
             cost = sum(spreads.get(i, 0.0) for i in (buy_isin, sell_isin)) / 2.0
-            capture = _expected_capture(row["zscore"])
-            verdict = ("clears costs" if capture > cost
-                       else "below costs" if capture else "weak signal")
+            capture = _expected_capture(row["zscore"], reversion)
+            if capture is None:
+                shown, verdict = "-", "not measured yet"
+            else:
+                shown = f"{capture:.1f}"
+                verdict = ("clears costs" if capture > cost
+                           else "below costs" if capture else "weak signal")
             print(f"  {buy:<20}{sell:<20}{abs(row['dislocation_bp']):>8.1f}"
-                  f"{row['zscore']:>7.1f}{cost:>7.0f}{capture:>7.1f}  {verdict}")
+                  f"{row['zscore']:>7.1f}{cost:>7.0f}{shown:>7}  {verdict}")
 
     print("\nresid = distance from the fitted curve, bp (positive = cheap) | gap = "
           "from its OWN\nrecent norm | z = that in its own standard deviations | "

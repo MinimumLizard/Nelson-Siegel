@@ -11,8 +11,18 @@ half the history computed under the old rules.
 import argparse
 import logging
 
+import numpy as np
+import pandas as pd
+
 from pipeline import db
 from signals import zscore
+
+# Horizon and thresholds the report quotes a signal's worth at. Measured on
+# every rebuild rather than pasted in: the previous figures were taken on a
+# 45-bond curve and were still being printed after it grew to 53, which
+# understated the 10-day capture enough to flip a verdict.
+REVERSION_HORIZON_DAYS = 10
+REVERSION_THRESHOLDS = (2.0, 3.0)
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +61,48 @@ def rebuild(conn) -> dict:
             [(row.obs_date.date().isoformat(), row.isin_a, row.isin_b, row.tau_a,
               row.tau_b, row.spread_bp, row.mean_bp, row.sd_bp, row.dislocation_bp,
               row.zscore, int(row.n_window)) for row in switches.itertuples()])
+    measure_reversion(conn, switches)
     conn.commit()
     return {"bond_signals": len(bonds), "switch_signals": len(switches)}
+
+
+def measure_reversion(conn, switches) -> dict:
+    """How far a pair spread actually came back, per z threshold.
+
+    This is what `signals.report` prints as `exp` and uses to decide whether
+    a candidate clears its own costs, so it has to describe the signals that
+    are actually stored — not a curve from three model versions ago.
+
+    In-sample throughout, and on one regime, so it measures that the
+    mechanism reverts rather than forecasting a strategy's return.
+    """
+    stored = {}
+    if switches.empty:
+        return stored
+    frame = switches.copy()
+    frame["pair"] = frame.isin_a + "/" + frame.isin_b
+    forward = []
+    for _, group in frame.groupby("pair"):
+        group = group.sort_values("obs_date").copy()
+        group["forward"] = (group.spread_bp.shift(-REVERSION_HORIZON_DAYS)
+                            - group.spread_bp)
+        forward.append(group)
+    measured = pd.concat(forward).dropna(subset=["forward"])
+    if measured.empty:
+        return stored
+    # Reversion is movement OPPOSITE the signal, so a cheap pair narrowing
+    # counts as a positive capture.
+    capture = -np.sign(measured.zscore) * measured.forward
+    for threshold in REVERSION_THRESHOLDS:
+        extreme = abs(measured.zscore) >= threshold
+        if extreme.sum() < 30:            # too thin to quote at all
+            continue
+        key = f"switch_reversion_{REVERSION_HORIZON_DAYS}d_z{threshold:g}"
+        db.store_signal_stat(conn, key, capture[extreme].mean(), int(extreme.sum()))
+        stored[key] = capture[extreme].mean()
+        log.info("%s = %+.1fbp over %d pair-days", key,
+                 capture[extreme].mean(), int(extreme.sum()))
+    return stored
 
 
 def main() -> None:

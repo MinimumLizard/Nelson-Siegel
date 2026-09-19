@@ -8,9 +8,13 @@ That number is NOT a signal on its own. Most of its variation is
 cross-sectional: some bonds simply sit persistently cheap (off-the-run,
 less liquid, held by someone who never sells), and would show a large
 positive residual every single day without ever being an opportunity.
-Measured on this data the spread of residuals ACROSS bonds is 41.6bp while
-a typical bond's own residual moves with a standard deviation of only
-7.5bp.
+Measured on this data the spread of residuals ACROSS bonds is about 11bp
+within a day, while a typical bond's own residual moves with a standard
+deviation of 7.6bp — a ratio of roughly 1.5x. (It was 41.6bp against 7.5bp
+before the curve gained its long end and began fitting properly; a smaller
+residual is the fit working, and the case for demeaning is correspondingly
+weaker than that number suggested. `python -m signals.validate` prints the
+current figures.)
 
 So the signal is each bond against ITS OWN recent history:
 

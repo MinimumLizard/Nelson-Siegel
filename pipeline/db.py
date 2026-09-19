@@ -18,6 +18,7 @@ Design decisions (agreed during sample inspection):
   beat one wide table where half the columns are NULL for half the rows.
 """
 
+import datetime as dt
 import logging
 import sqlite3
 from pathlib import Path
@@ -176,6 +177,20 @@ CREATE TABLE IF NOT EXISTS switch_signals (
     zscore         REAL,
     n_window       INTEGER,
     PRIMARY KEY (obs_date, isin_a, isin_b)
+);
+
+-- What the stored signals were worth, measured FROM those signals rather
+-- than pasted in from a note. Every empirical constant in this project has
+-- gone stale at least once: the reversion figures the report quotes were
+-- measured on a 45-bond curve and were still being printed after the curve
+-- grew to 53, understating the 10-day capture by about 1bp at |z|>2 and
+-- 1.7bp at |z|>3 — enough to flip a "below costs" verdict. Recomputing on
+-- every rebuild is cheap (under a second) and cannot drift.
+CREATE TABLE IF NOT EXISTS signal_stats (
+    key         TEXT PRIMARY KEY,  -- e.g. 'switch_reversion_10d_z2'
+    value       REAL NOT NULL,
+    n           INTEGER,           -- observations behind it
+    measured_at TEXT
 );
 
 -- Bookkeeping for every remote file: what we downloaded, its hash, which
@@ -452,6 +467,25 @@ def record_file(conn, url, **fields):
         assignments = ", ".join(f"{column} = ?" for column in fields)
         conn.execute(f"UPDATE files SET {assignments} WHERE url = ?",
                      (*fields.values(), url))
+
+
+def store_signal_stat(conn, key: str, value: float, n: int) -> None:
+    """Record an empirical figure measured from the stored signals."""
+    conn.execute(
+        """INSERT INTO signal_stats (key, value, n, measured_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value, n = excluded.n,
+               measured_at = excluded.measured_at""",
+        (key, float(value), int(n),
+         dt.datetime.now(dt.UTC).isoformat(timespec="seconds")))
+
+
+def signal_stats(conn) -> dict:
+    """{key: {'value', 'n', 'measured_at'}} — empty before the first rebuild."""
+    return {row["key"]: {"value": row["value"], "n": row["n"],
+                         "measured_at": row["measured_at"]}
+            for row in conn.execute("SELECT * FROM signal_stats")}
 
 
 def lkr_from_millions(millions: float) -> int:

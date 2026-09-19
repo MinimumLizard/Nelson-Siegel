@@ -359,14 +359,14 @@ auction, high enough that an announced-but-untraded bond does not.
 
 `python -m signals.validate` measures where in its issuance cycle a bond
 sits cheap to its OWN norm (`dislocation_bp`, the same quantity the reports
-show as `gap`). Over the 44 bond-auctions on 15 auction dates in this data:
+show as `gap`). Over the 47 bond-auctions on 16 auction dates in this data:
 
-    10-6 days before      +0.3bp     n=99
-    5-1 days before       +0.7bp     n=75
-    auction day           +0.7bp     n=25
-    1-7 days after        +6.0bp    n=122
-    8-14 days after       +5.7bp    n=142
-    15-30 days after      +2.8bp    n=335
+    10-6 days before      -1.2bp    n=111
+    5-1 days before       +0.7bp     n=87
+    auction day           +0.4bp     n=28
+    1-7 days after        +5.8bp    n=137
+    8-14 days after       +5.1bp    n=150
+    15-30 days after      +1.9bp    n=351
 
 This is the OPPOSITE of the textbook pre-auction concession, in which the
 market is supposed to cheapen a bond going in to make room for the supply.
@@ -379,7 +379,7 @@ dealers who took down the new supply then carry it and quote it cheap until
 it clears. That is a story, not a finding; what the data supports is the
 shape of the curve above.
 
-Treat it as context rather than a signal: 44 events is few, the sample is
+Treat it as context rather than a signal: 47 events is few, the sample is
 one 9-month regime, and 6bp is well inside a typical 16bp bid-offer. Its
 practical use is judging a reading — a benchmark showing +5bp cheap a week
 after its auction is closer to normal than the number alone suggests.

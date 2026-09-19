@@ -29,10 +29,10 @@ trade.
 **The auction cycle.** Testing the 15 auctions in this data for the classic
 pre-auction concession found the opposite pattern: bonds do not cheapen
 going in (+0.5bp over the ten days before, which is nothing), they cheapen
-AFTER and stay cheap — about +5.9bp versus their own norm over the following
-fortnight, fading to +2.8bp by 15-30 days as the new supply is distributed.
+AFTER and stay cheap — about +5.4bp versus their own norm over the following
+fortnight, fading to +1.9bp by 15-30 days as the new supply is distributed.
 So `post_auction` marks that window, and `days_since_auction` lets a reading
-be judged against it. On 44 bond-auctions across 15 auction dates this is
+be judged against it. On 47 bond-auctions across 16 auction dates this is
 suggestive, not established, and 6bp sits below a typical 16bp bid-offer —
 it is context for a decision, not a trade on its own. `python -m
 signals.validate` reprints the table as history grows.

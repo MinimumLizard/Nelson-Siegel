@@ -24,7 +24,8 @@ from curves import nelson_siegel as ns
 from dashboard import palette
 from pipeline import config, db
 from signals import carry, execution, liquidity
-from signals.report import MAX_TRADEABLE_SPREAD_BP, _expected_capture
+from signals.report import (MAX_TRADEABLE_SPREAD_BP, _expected_capture,
+                            reversion_table)
 
 OUTPUT = Path("docs/index.html")
 CHART_WIDTH, CHART_HEIGHT = 880, 400
@@ -81,6 +82,7 @@ def gather(conn) -> dict | None:
     gap = execution.gap(conn, obs_date)
     money = carry.profile(conn, obs_date, entry_gap_bp=gap["gap_bp"] if gap else 0.0)
     funding = carry.funding_rate(conn, obs_date)
+    reversion = reversion_table(conn)
     labels = {r["isin"]: r["series_label"] or r["isin"]
               for r in conn.execute("SELECT isin, series_label FROM bonds")}
 
@@ -98,6 +100,7 @@ def gather(conn) -> dict | None:
         "core": core, "others": others, "core_isins": core_isins,
         "waiting": waiting, "liquidity": facts, "labels": labels,
         "carry": money, "funding": funding, "gap": gap,
+        "reversion": reversion,
         "coverage": dict(coverage),
         "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
@@ -412,8 +415,9 @@ def _waiting_note(waiting) -> str:
             f'against so far.</p>')
 
 
-def _switch_rows(switches, spreads) -> str:
+def _switch_rows(switches, spreads, reversion=None) -> str:
     out = []
+    reversion = reversion or {}
     for row in switches:
         if row["zscore"] >= 0:
             buy, sell = row["label_a"] or row["isin_a"], row["label_b"] or row["isin_b"]
@@ -422,14 +426,19 @@ def _switch_rows(switches, spreads) -> str:
             buy, sell = row["label_b"] or row["isin_b"], row["label_a"] or row["isin_a"]
             buy_isin, sell_isin = row["isin_b"], row["isin_a"]
         cost = sum(spreads.get(i, 0.0) for i in (buy_isin, sell_isin)) / 2.0
-        capture = _expected_capture(row["zscore"])
-        clears = capture > cost
+        capture = _expected_capture(row["zscore"], reversion)
+        if capture is None:
+            shown, clears, verdict = "–", False, "not measured yet"
+        else:
+            shown = f"{capture:.1f}"
+            clears = capture > cost
+            verdict = "clears costs" if clears else ("below costs" if capture
+                                                     else "weak signal")
         colour = "var(--good)" if clears else "var(--warning)"
-        verdict = "clears costs" if clears else ("below costs" if capture else "weak signal")
         out.append(
             f'<tr><td>{html.escape(buy)}</td><td>{html.escape(sell)}</td>'
             f'<td>{abs(row["dislocation_bp"]):.1f}</td><td>{row["zscore"]:+.1f}</td>'
-            f'<td>{cost:.0f}</td><td>{capture:.1f}</td>'
+            f'<td>{cost:.0f}</td><td>{shown}</td>'
             f'<td><span class="badge"><i style="background:{colour}"></i>{verdict}</span></td></tr>')
     return "".join(out)
 
@@ -564,7 +573,7 @@ def render(data, fragment: bool = False) -> str:
      the last {liquidity.WINDOW_DAYS} · <b>auction</b> is days since this bond
      was last sold, <span class="hot">highlighted</span> inside the
      {liquidity.POST_AUCTION_DAYS}-day window in which freshly auctioned paper
-     has sat about 6bp cheap to its own norm · <b>cover</b> is bids over the
+     has sat about 5bp cheap to its own norm · <b>cover</b> is bids over the
      amount offered at that auction, so how much demand the last supply met.</p>
   {_waiting_note(data.get("waiting", []))}
 
@@ -589,7 +598,7 @@ def render(data, fragment: bool = False) -> str:
   <div class="card"><table><thead><tr>
     <th>buy</th><th>sell</th><th>gap bp</th><th>z</th><th>cost bp</th>
     <th>expected bp</th><th>verdict</th></tr></thead>
-    <tbody>{_switch_rows(data["switches"], data["spreads"])}</tbody></table></div>
+    <tbody>{_switch_rows(data["switches"], data["spreads"], data.get("reversion"))}</tbody></table></div>
   <p class="foot"><b>gap</b> is distance from the pair's own recent norm ·
      <b>z</b> is that in its own standard deviations · <b>cost</b> is half the
      bid-offer on each leg · <b>expected</b> is what a signal this size has
@@ -600,7 +609,7 @@ def render(data, fragment: bool = False) -> str:
   <p class="foot">A bond's raw distance from the curve is not a signal: some
      bonds sit permanently cheap. Each is scored against <b>its own</b> trailing
      60-day window, which excludes the day being scored. Measured over this
-     sample the residuals mean-revert with a half-life near 11 days; run
+     sample the residuals mean-revert with a half-life near 6 days; run
      <code>python -m signals.validate</code> for the current numbers. One
      9-month sample in one regime — evidence the mechanism works, not a
      forecast of what it pays.</p>

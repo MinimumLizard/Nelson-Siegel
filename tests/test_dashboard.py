@@ -96,7 +96,8 @@ def test_page_reports_the_cost_caveat(seeded):
     page = build.render(build.gather(seeded))
     # Every switch row carries one of the three verdicts...
     assert any(verdict in page
-               for verdict in ("clears costs", "below costs", "weak signal"))
+               for verdict in ("clears costs", "below costs", "weak signal",
+                               "not measured yet"))
     # ...and the standing caveats are always on the page, not just when a
     # given day happens to produce a marginal candidate. Compared on
     # whitespace-collapsed text, since the source wraps these sentences.
