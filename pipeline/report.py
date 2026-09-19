@@ -6,6 +6,23 @@ a two-panel yield/volume chart to data/reports/<ISIN>.png.
 
 Think of the SQL below as two data frames merged on obs_date — the same
 full_join(quotes, trades) you would write in dplyr.
+
+**Two sources report traded volume, and they are dated differently.** The
+Outright Transactions Volumes file and the Secondary Market Trade Summary
+carry identical amounts two business days apart: on 938 matched amounts in
+this archive the volumes file sits +2 business days after the trade
+summary, against 59 matches at no offset. The cause is settlement. The
+volumes file's date is derived from a remaining-years column quoted to
+SETTLEMENT, and PDMO settlement is T+2 on 9 of the 16 auctions here.
+
+So the chart and the traded column use the TRADE SUMMARY, which is dated to
+the trade. The volumes figure is still printed, under the name `settled_mn`
+rather than a bare `volume_mn`, because it is real published data and
+because a column silently two days out is exactly what makes someone
+distrust a model that is otherwise right.
+
+Nothing else reads the volumes-file column: the curve, the signals,
+liquidity tiering and carry all take their turnover from the trade summary.
 """
 
 import argparse
@@ -54,9 +71,12 @@ def plot_history(history: pd.DataFrame, isin: str, title: str):
     yield_ax.legend(loc="best", fontsize=8)
     yield_ax.grid(alpha=0.3)
 
-    # Outright volume from the volumes reports, in Rs. billions for scale.
-    volume_ax.bar(history["obs_date"], history["volume_lkr"] / 1e9, width=1.0)
-    volume_ax.set_ylabel("volume, Rs. bn")
+    # Executed volume from the trade summary, which is dated to the TRADE.
+    # The volumes file reports the same amounts two business days later,
+    # because its date derives from a remaining-years column quoted to
+    # settlement; plotting that would put every bar two days late.
+    volume_ax.bar(history["obs_date"], history["traded_lkr"] / 1e9, width=1.0)
+    volume_ax.set_ylabel("traded, Rs. bn")
     volume_ax.grid(alpha=0.3)
     figure.autofmt_xdate()
 
@@ -95,7 +115,7 @@ def main() -> None:
     printable["obs_date"] = printable["obs_date"].dt.strftime("%Y-%m-%d")
     for column in ("volume_lkr", "traded_lkr"):
         printable[column] = (printable[column] / 1e6).round(1)  # show Rs. mn
-    printable = printable.rename(columns={"volume_lkr": "volume_mn",
+    printable = printable.rename(columns={"volume_lkr": "settled_mn",
                                           "traded_lkr": "traded_mn"})
     print(printable.to_string(index=False, na_rep="."))
 

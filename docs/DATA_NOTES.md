@@ -598,3 +598,72 @@ very investigation: a diagnostic asking "what would lambda be now" silently
 repointed the stored model. Persisting is `--calibrate`'s own step
 (`store_lambda`), so measuring can never move the model underneath a stored
 history of residuals.
+
+## Two sources report traded volume, two business days apart
+
+The Outright Transactions Volumes file and the Secondary Market Trade
+Summary both report how much of a bond changed hands. They carry identical
+amounts on different dates:
+
+    10.75%2034A   trade summary:  3,400mn on 2026-09-14,  1,750mn on 09-15
+                  volumes file:   3,400mn on 2026-09-16,  1,750mn on 09-17
+
+Matching on (ISIN, exact amount) across the archive, the offset is
+systematic:
+
+    trade summary date + 0 business days ->   59 matches
+                        + 1               ->  102
+                        + 2               ->  938   <-- the alignment
+                        + 3               ->  139
+
+The cause is settlement. The volumes file has no date column; its date is
+derived from a remaining-years figure, and that figure is quoted to
+SETTLEMENT rather than to the trade. PDMO settlement is T+2 on 9 of the 16
+auctions in this data, which is exactly the offset observed.
+
+**Which date is right depends on the question.** For "when did this bond
+trade", the trade summary. For "when does this money move", the volumes
+file. The pipeline stores both, unaltered, and `pipeline/report.py` now
+plots the trade-dated one and labels the other `settled_mn` rather than a
+bare `volume_mn`.
+
+Nothing else was affected: the curve, the signals, liquidity tiering and
+carry all take turnover from `trade_summary`. The defect was confined to one
+diagnostic chart — which happened to be the exact chart someone would open
+to ask "did the 2034 trade", so it was worth correcting rather than
+documenting away.
+
+A tempting fix was rejected: shifting the volumes date back two business
+days on ingest. Settlement is T+2 only modally (T+3 on 4 auctions, T+4 on 2,
+T+5 on 1), and only 938 of 2,250 trade rows matched an amount at all, so the
+arithmetic would be a guess dressed as a correction. Storing what each
+source says, and choosing between them at the point of use, is honest.
+
+## The site can answer with a firewall instead of a report
+
+On 2026-09-19 treasury.gov.lk began serving this project's container
+**HTTP 307 and a Sucuri JavaScript challenge page** in place of every index.
+GitHub's runners were unaffected on the same day — the 22:08 UTC run logged
+348 daily files and 173 trade summaries as usual — so it is an IP
+reputation judgement, most likely provoked by a 631-file backfill a few
+hours earlier.
+
+What made it worth fixing is how it would have failed rather than that it
+happened. Nothing about the challenge looks like an error:
+
+* `raise_for_status()` ignores 3xx, so a 307 passed straight through;
+* the challenge is valid HTML, so the index parser simply found no rows;
+* zero rows meant `build_worklist` contributed nothing;
+* the run then reported success having fetched precisely nothing.
+
+Green, quiet and wrong — the same shape as the trade-check failure a week
+earlier, which is twice now that a silent no-op has outlasted a loud one.
+Two guards:
+
+* `fetch.polite_get` refuses to return a response that is not the content
+  asked for: any status at or above 300, or a small HTML body carrying a
+  known challenge marker. A challenge now raises, retries, and finally fails
+  the fetch.
+* `build_worklist` counts an index that parses to ZERO entries as a failure,
+  not as "no news". One empty index is survivable, because a year that has
+  not started yet legitimately lists nothing; every index empty raises.

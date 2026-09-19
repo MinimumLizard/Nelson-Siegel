@@ -265,3 +265,17 @@ def test_a_real_isin_always_wins_over_a_synthetic_key():
     lookup = ({"13.25%2033A": "LKB01533A154"}, {}, {"2033-07-01": [ordinary]})
     quote = _quote("13.25%2033A", 13.25, "2033-07-01", 11.73, 11.512)
     assert ingest._resolve_isin(lookup, quote) == ("LKB01533A154", "label")
+
+
+def test_the_per_bond_chart_uses_the_trade_dated_volume():
+    """Two published sources report traded volume two business days apart: the
+    volumes file dates from a remaining-years column quoted to T+2 settlement,
+    the trade summary dates to the trade. The chart must plot the latter, or
+    every bar sits two days late in the one view someone opens to ask whether
+    a bond traded."""
+    from pathlib import Path
+    source = Path("pipeline/report.py").read_text()
+    bar = next(line for line in source.splitlines() if "volume_ax.bar(" in line)
+    assert "traded_lkr" in bar and "volume_lkr" not in bar
+    # The settlement-dated figure is still shown, under a name that says so.
+    assert '"volume_lkr": "settled_mn"' in source

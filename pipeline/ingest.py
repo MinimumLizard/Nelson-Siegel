@@ -56,8 +56,17 @@ def build_worklist() -> list[WorkItem]:
     network at all and had a perfectly good database to work from. Ingest
     is idempotent, so anything missed is simply picked up tomorrow.
 
-    If EVERY index fails it is an outage rather than a blip, and that does
-    raise: continuing would quietly report success having fetched nothing.
+    An index that parses to ZERO entries counts as a failure too, not as
+    "no news". Every populated index page has always listed files, so an
+    empty one means the page changed shape or something answered in its
+    place — and silently ingesting nothing is the failure mode this whole
+    pipeline is least able to notice. The exception is a year that has not
+    started yet, which is why one empty index is survivable and all of them
+    being empty is not.
+
+    If EVERY index fails or comes back empty it is an outage rather than a
+    blip, and that does raise: continuing would quietly report success
+    having fetched nothing.
     """
     items: list[WorkItem] = []
     attempted = failed = 0
@@ -70,11 +79,19 @@ def build_worklist() -> list[WorkItem]:
                 failed += 1
                 log.warning("%s index %s unreachable, skipping: %s", label, year, error)
                 continue
+            if not entries:
+                failed += 1
+                log.warning("%s index %s parsed to ZERO files — the page has "
+                            "changed shape, or something answered in its place",
+                            label, year)
+                continue
             log.info("%s index %s: %d files", label, year, len(entries))
             items += [WorkItem(entry, year) for entry in entries]
     if attempted and failed == attempted:
         raise RuntimeError(
-            f"all {attempted} index pages unreachable — treasury.gov.lk looks down")
+            f"all {attempted} index pages were unreachable or empty — "
+            f"treasury.gov.lk is down, or is serving us something other than "
+            f"the reports")
     if failed:
         log.warning("%d of %d index pages were skipped; the next run will "
                     "pick up whatever they list", failed, attempted)

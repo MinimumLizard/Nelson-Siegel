@@ -6,7 +6,18 @@ politeness rules from config.py in one place:
   * a shared requests.Session with an honest User-Agent,
   * a mandatory pause between consecutive requests (module-level bookkeeping,
     so the rule holds even across different callers),
-  * retries with exponential backoff on transient failures.
+  * retries with exponential backoff on transient failures,
+  * a refusal to hand back anything that is not the content we asked for.
+
+That last one is not fussiness. treasury.gov.lk sits behind a Sucuri web
+application firewall which, when it decides a client looks like a bot,
+answers with **HTTP 307 and a JavaScript challenge page** instead of the
+report. `raise_for_status()` ignores 3xx, and the challenge is valid HTML,
+so without the check below a challenged run would sail through: the index
+parser would find no rows in it, `build_worklist` would add nothing, and
+the job would report success having fetched precisely nothing. That is the
+worst failure this pipeline can have — green, quiet and wrong — so a
+challenge is turned into a loud exception instead.
 
 `download_file` adds idempotent caching: if the target file already exists it
 returns immediately without touching the network, which is what makes
@@ -43,6 +54,30 @@ def _wait_politely() -> None:
     _last_request_time = time.monotonic()
 
 
+# Markers of an interstitial served INSTEAD of the content. Checked only on
+# small HTML-ish bodies, so a genuine report can never trip them.
+CHALLENGE_MARKERS = (b"sucuri_cloudproxy", b"You are being redirected",
+                     b"Javascript is required")
+CHALLENGE_SNIFF_BYTES = 8192
+
+
+def _reject_if_not_content(response: requests.Response) -> None:
+    """Raise unless this response really is the file or page we asked for."""
+    # requests follows ordinary redirects itself, so anything still 3xx here
+    # is a redirect the server would not complete — the WAF's calling card.
+    if response.status_code >= 300:
+        raise requests.RequestException(
+            f"HTTP {response.status_code} with no usable redirect "
+            f"(a bot challenge or an interstitial, not the content)")
+    head = response.content[:CHALLENGE_SNIFF_BYTES]
+    if len(response.content) <= CHALLENGE_SNIFF_BYTES:
+        for marker in CHALLENGE_MARKERS:
+            if marker in head:
+                raise requests.RequestException(
+                    f"a bot-challenge page was served instead of the content "
+                    f"(matched {marker.decode()!r})")
+
+
 def polite_get(url: str) -> requests.Response:
     """GET a URL with delay + retries. Raises after MAX_RETRIES failures."""
     last_error: Exception | None = None
@@ -51,6 +86,7 @@ def polite_get(url: str) -> requests.Response:
         try:
             response = _session.get(url, timeout=config.REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
+            _reject_if_not_content(response)
             return response
         except requests.RequestException as error:
             last_error = error
