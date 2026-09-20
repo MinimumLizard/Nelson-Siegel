@@ -286,3 +286,34 @@ def test_quote_is_not_attributed_on_maturity_alone():
     stepped = {"series_label": "12.40%7.50%5.00%2033A",
                "maturity_date": dt.date(2033, 1, 15), "coupon_pct": 12.4}
     assert ingest._resolve_isin(lookup, stepped) == (None, "unresolved")
+
+
+def test_the_last_executed_level_is_carried_alongside_the_quote(tmp_path):
+    """The page is built from quotes, which the PDMO publishes as a midpoint
+    of AVERAGE dealer buying and selling prices — indicative, and nobody is
+    obliged to deal there. Executed levels have run 14-46bp above it, so the
+    level a bond last actually changed hands at has to be visible per bond,
+    not just as a market-wide bias line."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "last.sqlite")
+    db.upsert_trade_summary(conn, "2026-09-15", "LKB00934J156", "TBond",
+                            None, None, None, None, 12.02, 500_000_000, 1, "t")
+    db.upsert_trade_summary(conn, "2026-09-17", "LKB00934J156", "TBond",
+                            None, None, None, None, 12.19, 900_000_000, 2, "t")
+    conn.commit()
+
+    facts = liquidity.profile(conn, "2026-09-18")["LKB00934J156"]
+    assert facts["last_trade_yield"] == pytest.approx(12.19)   # the latest, not the first
+    assert facts["last_trade_date"] == "2026-09-17"
+    assert facts["days_since_trade"] == 1
+
+
+def test_the_last_executed_level_never_comes_from_the_future(tmp_path):
+    """Scoring a historical day must not reveal a trade that had not happened."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "last.sqlite")
+    db.upsert_trade_summary(conn, "2026-09-17", "LKB00934J156", "TBond",
+                            None, None, None, None, 12.19, 900_000_000, 2, "t")
+    conn.commit()
+    facts = liquidity.profile(conn, "2026-09-16")
+    assert facts.get("LKB00934J156", {}).get("last_trade_yield") is None

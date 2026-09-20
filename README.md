@@ -210,6 +210,29 @@ files' free-text titles contain typos and mixed date orders. "Amended"
 reports are complete replacements: files are ingested oldest-posted first,
 so the amendment simply overwrites.
 
+### What a "quote" actually is
+
+The daily summary's columns are labelled **average buying price** and
+**average selling price**. So a quote is already an average across primary
+dealers, and the mid this project fits is then the midpoint of those two
+averages. It is indicative: nobody is obliged to deal there, which is why
+`observations.executable` is 0 for every `pdmo_daily` row and 1 only for
+auction yields.
+
+Executed levels sit well above it, consistently and per bond:
+
+| | quote mid | traded | gap |
+|---|---|---|---|
+| 11.70%2034A, 15 Sep | 11.71% | 12.02% | +31bp |
+| 10.75%2034A, 15 Sep | 11.68% | 12.14% | +46bp |
+| 10.25%2034A, 17 Sep | 11.77% | 12.19% | +42bp |
+
+On 2026-09-17 every bond that traded went through above its quote mid, from
++14bp to +41bp. So the core book carries **both** numbers: `quote` for the
+screen and `traded` for where the bond last actually changed hands, with the
+age of that print. Reading the curve alone tells you where dealers are
+showing, not where you can get filled.
+
 ## The curve
 
 One Nelson-Siegel curve is fitted per day, on the dealers' quote **mids**,
