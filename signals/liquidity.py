@@ -26,7 +26,7 @@ leave too few points to define the shape) while being demoted in the
 SIGNALS. The broad universe is the measuring stick; the core is what you
 trade.
 
-**The auction cycle.** Testing the 15 auctions in this data for the classic
+**The auction cycle.** Testing the 16 auctions in this data for the classic
 pre-auction concession found the opposite pattern: bonds do not cheapen
 going in (+0.5bp over the ten days before, which is nothing), they cheapen
 AFTER and stay cheap — about +5.4bp versus their own norm over the following
