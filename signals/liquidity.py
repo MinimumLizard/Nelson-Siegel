@@ -48,7 +48,9 @@ POST_AUCTION_DAYS = 14     # the window in which auctioned paper sits cheap
 
 EMPTY = {"turnover_lkr": 0, "n_trades": 0, "days_traded": 0,
          "is_benchmark": False, "last_auction": None, "days_since_auction": None,
-         "post_auction": False, "bid_to_cover": None, "tier": "wider"}
+         "post_auction": False, "bid_to_cover": None, "tier": "wider",
+         "last_trade_date": None, "last_trade_yield": None,
+         "days_since_trade": None}
 
 
 def profile(conn, obs_date: str) -> dict:
@@ -92,6 +94,22 @@ def profile(conn, obs_date: str) -> dict:
                 ORDER BY auction_date""", (obs_date,)):
         if row["isin"] in out:
             out[row["isin"]]["bid_to_cover"] = row["bids_lkr"] / row["offered_lkr"]
+
+    # The last level this bond actually changed hands at. Everything else on
+    # the page is derived from QUOTES, which the PDMO publishes as an average
+    # buying price and an average selling price across primary dealers — an
+    # indicative midpoint of an average, which nobody is obliged to deal on.
+    # Executed levels have been running 14 to 46bp above it. A reader should
+    # not have to infer that from a market-wide bias line.
+    for row in conn.execute(
+            """SELECT isin, obs_date, wavg_yield FROM trade_summary
+                WHERE security_type = 'TBond' AND wavg_yield IS NOT NULL
+                  AND obs_date <= ? ORDER BY obs_date""", (obs_date,)):
+        entry = out.setdefault(row["isin"], dict(EMPTY))
+        entry.update(last_trade_date=row["obs_date"],
+                     last_trade_yield=row["wavg_yield"],
+                     days_since_trade=(today - dt.date.fromisoformat(
+                         row["obs_date"])).days)
 
     for facts in out.values():
         facts["tier"] = _tier(facts)

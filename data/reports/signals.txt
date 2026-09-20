@@ -8,16 +8,16 @@ funding: 9.87% = 9.82% 12m bill + 5bp
 === CORE BOOK — 9 auction benchmark(s), actually trading ===
 
 cheapest at the top, richest at the bottom
-  series               resid     gap      z   b/o  carry  roll  per dur   Rs bn  days   auction  cover
-  11.60%2031A           +9.2    +5.2    0.9    14    156   +87       71    50.1    29       50d   2.9x
-  10.75%2037A          +11.6    +5.3    0.8    22    242   +39       46    26.0    25       7d*   2.9x
-  10.85%2036A           +7.9    +5.8    0.7    21    232   +44       47    26.8    25       50d   2.1x
-  11.20%2033            +5.9    +3.5    0.7    19    192   +72       59    17.4    25      114d   2.0x
-  11.50%2032A           -1.8    +3.3    0.5    16    182   +69       59    14.1    18       99d   2.1x
-  11.70%2034A           +1.8    +2.4    0.3    22    210   +55       52    96.0    32       7d*   2.3x
-  10.00%2030A           +5.5    -2.5   -0.4    17    140   +92       73    70.7    33       7d*   1.5x
-  11.00%2030B           +1.3    -2.5   -0.4    17    141   +87       72    55.3    33       67d   2.9x
-  11.00%2030A           -4.7    -5.5   -1.0    16    123   +87       74     5.6    17       99d   1.8x
+  series               quote   traded   resid     gap      z   b/o  carry  roll  per dur   Rs bn  days   auction  cover
+  11.60%2031A          11.30 11.50/1d    +9.2    +5.2    0.9    14    156   +87       71    50.1    29       50d   2.9x
+  10.75%2037A          12.15 12.20/2d   +11.6    +5.3    0.8    22    242   +39       46    26.0    25       7d*   2.9x
+  10.85%2036A          12.06 12.16/2d    +7.9    +5.8    0.7    21    232   +44       47    26.8    25       50d   2.1x
+  11.20%2033           11.65 11.80/1d    +5.9    +3.5    0.7    19    192   +72       59    17.4    25      114d   2.0x
+  11.50%2032A          11.56 11.77/1d    -1.8    +3.3    0.5    16    182   +69       59    14.1    18       99d   2.1x
+  11.70%2034A          11.83 12.02/3d    +1.8    +2.4    0.3    22    210   +55       52    96.0    32       7d*   2.3x
+  10.00%2030A          11.13 11.42/1d    +5.5    -2.5   -0.4    17    140   +92       73    70.7    33       7d*   1.5x
+  11.00%2030B          11.14 11.41/1d    +1.3    -2.5   -0.4    17    141   +87       72    55.3    33       67d   2.9x
+  11.00%2030A          10.97 11.00/3d    -4.7    -5.5   -1.0    16    123   +87       74     5.6    17       99d   1.8x
 
   * still inside the post-auction window: over the 15 auctions in this data
     bonds sat about 5bp cheap to their own norm for a fortnight afterwards.
@@ -25,18 +25,18 @@ cheapest at the top, richest at the bottom
 === ALSO TRADING — 13 liquid, but not on the run ===
 
 cheap to their own norm
-  series               resid     gap      z   b/o   Rs bn  days
-  11.50%2028B           +5.3    +5.6    0.9    14     9.1    14
-  12.00%2031A           -0.9    +6.7    0.7    18     8.7    14
-  10.75%2028A           +8.9    +1.9    0.3    19     6.5    14
-  9.00%2033B            -2.1    +1.4    0.2    25    28.1    23
+  series               quote   traded   resid     gap      z   b/o   Rs bn  days
+  11.50%2028B          10.56 10.84/1d    +5.3    +5.6    0.9    14     9.1    14
+  12.00%2031A          11.38 11.50/3d    -0.9    +6.7    0.7    18     8.7    14
+  10.75%2028A          10.24 10.60/1d    +8.9    +1.9    0.3    19     6.5    14
+  9.00%2033B           11.68 11.97/1d    -2.1    +1.4    0.2    25    28.1    23
 
 rich to their own norm
-  series               resid     gap      z   b/o   Rs bn  days
-  11.00%2029A          -11.9    -3.9   -0.9    21     8.3    15
-  10.35%2029A           -8.3    -3.8   -0.8    21     5.7    15
-  9.00%2028B            +0.7    -5.3   -0.6    22     7.8    13
-  11.25%2026A          -10.9    -9.9   -0.6    41    17.3    10
+  series               quote   traded   resid     gap      z   b/o   Rs bn  days
+  11.00%2029A          10.68 11.05/1d   -11.9    -3.9   -0.9    21     8.3    15
+  10.35%2029A          10.75 10.50/8d    -8.3    -3.8   -0.8    21     5.7    15
+  9.00%2028B           10.23 10.15/8d    +0.7    -5.3   -0.6    22     7.8    13
+  11.25%2026A           9.26  9.06/9d   -10.9    -9.9   -0.6    41    17.3    10
 
 SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
   buy                 sell                     gap      z   cost    exp  verdict
@@ -47,6 +47,11 @@ SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
   11.50%2032A         10.00%2030A              5.8   -0.9     16    0.0  weak signal
   10.85%2036A         11.00%2030A             11.3    0.9     18    0.0  weak signal
 
+quote = the day's indicative mid, which is a midpoint of the PDMO's AVERAGE
+buying and selling prices across dealers — not a level anyone must deal on
+traded = where it last actually changed hands, and how long ago. Executed
+levels have been running well above the screen; the bias line at the top
+measures that across the market.
 resid = distance from the fitted curve, bp (positive = cheap) | gap = from its OWN
 recent norm | z = that in its own standard deviations | cost = half the bid-offer
 on each leg | exp = historical 10-day reversion at this z

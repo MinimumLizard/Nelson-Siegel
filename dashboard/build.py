@@ -83,6 +83,9 @@ def gather(conn) -> dict | None:
     money = carry.profile(conn, obs_date, entry_gap_bp=gap["gap_bp"] if gap else 0.0)
     funding = carry.funding_rate(conn, obs_date)
     reversion = reversion_table(conn)
+    quotes = {r["isin"]: r["mid_yield"] for r in conn.execute(
+        """SELECT isin, mid_yield FROM observations WHERE obs_date=?
+             AND source='pdmo_daily' AND mid_yield IS NOT NULL""", (obs_date,))}
     labels = {r["isin"]: r["series_label"] or r["isin"]
               for r in conn.execute("SELECT isin, series_label FROM bonds")}
 
@@ -100,7 +103,7 @@ def gather(conn) -> dict | None:
         "core": core, "others": others, "core_isins": core_isins,
         "waiting": waiting, "liquidity": facts, "labels": labels,
         "carry": money, "funding": funding, "gap": gap,
-        "reversion": reversion,
+        "reversion": reversion, "quotes": quotes,
         "coverage": dict(coverage),
         "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
@@ -300,6 +303,7 @@ tr:last-child td { border-bottom: none; }
          color: var(--ink-2); white-space: nowrap; }
 .badge i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .hot { color: var(--series-2); font-weight: 600; }
+.age { color: var(--muted); font-size: 10px; margin-left: 3px; }
 .tier { color: var(--muted); font-size: 12.5px; margin: -4px 0 10px; }
 .foot { color: var(--ink-2); font-size: 12.5px; margin-top: 10px; }
 .foot code { background: var(--neutral); padding: 1px 5px; border-radius: 4px; }
@@ -358,7 +362,7 @@ def _signal_rows(signals, spreads, cheap: bool, limit=6, facts=None) -> str:
     return "".join(cells)
 
 
-def _core_rows(core, spreads, facts, money=None) -> str:
+def _core_rows(core, spreads, facts, money=None, quotes=None) -> str:
     """The core book in full, cheapest at the top.
 
     Unlike the other tables this one is never trimmed. It is only ever a
@@ -389,8 +393,19 @@ def _core_rows(core, spreads, facts, money=None) -> str:
                        f'<td>{held["roll_bp"]:+.0f}</td>'
                        f'<td><b>{held["per_duration_bp"]:.0f}</b></td>'
                        if held else '<td>–</td><td>–</td><td>–</td>')
+        # The quote is an indicative mid of the PDMO's AVERAGE buying and
+        # selling prices; `traded` is where the bond last actually changed
+        # hands. They have been 14-46bp apart and only one is obtainable.
+        quoted = (quotes or {}).get(row["isin"])
+        done, age = fact.get("last_trade_yield"), fact.get("days_since_trade")
+        traded = (f'{done:.2f}<span class="age">{age}d</span>' if done and age
+                  else f'{done:.2f}' if done else "–")
         out.append(
             f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td>'
+            f'<td>{quoted:.2f}</td>' if quoted else
+            f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td><td>–</td>')
+        out.append(
+            f'<td>{traded}</td>'
             f'<td>{gap:+.1f}</td><td>{row["zscore"]:.1f}</td>'
             f'<td>{spread_cell}</td>'
             f'{carry_cells}'
@@ -509,7 +524,13 @@ def render(data, fragment: bool = False) -> str:
         f'{"cheaper" if gap["gap_bp"] > 0 else "richer"} than the quote mid'
         if gap else "at the quoted mid, there being too few trades to measure the gap")
     core_table = (
-        f'<table><thead><tr><th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
+        f'<table><thead><tr><th>series</th>'
+        f'<th title="the day\'s indicative mid — a midpoint of the PDMO\'s AVERAGE '
+        f'buying and selling prices across dealers, not a level anyone must deal '
+        f'on">quote</th>'
+        f'<th title="where this bond last actually changed hands, and how long '
+        f'ago">traded</th>'
+        f'<th>gap bp</th><th>z</th><th>b/o</th>'
         f'<th title="entry yield less the cost of funding, bp per year">carry</th>'
         f'<th title="price gain from ageing down the curve, bp per year">roll</th>'
         f'<th title="carry plus rolldown per year of duration — the only one of '
@@ -518,7 +539,7 @@ def render(data, fragment: bool = False) -> str:
         f'<th title="days traded in the last {liquidity.WINDOW_DAYS}">days</th>'
         f'<th>auction</th><th title="bids over amount offered">cover</th><th></th>'
         f'</tr></thead><tbody>'
-        f'{_core_rows(core, data["spreads"], data["liquidity"], data.get("carry"))}'
+        f'{_core_rows(core, data["spreads"], data["liquidity"], data.get("carry"), data.get("quotes"))}'
         f'</tbody></table>'
         if core else
         f'<p class="empty">No current benchmark cleared the trading floor of '

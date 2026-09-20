@@ -118,6 +118,10 @@ def show(conn, obs_date: str, top: int) -> None:
               + (f" (bill as of {money['as_of']})" if money["stale_days"] > 1 else ""))
 
     spreads = spreads_on(conn, obs_date)
+    quotes = {row["isin"]: row["mid_yield"] for row in conn.execute(
+        """SELECT isin, mid_yield FROM observations
+            WHERE obs_date = ? AND source = 'pdmo_daily'
+              AND mid_yield IS NOT NULL""", (obs_date,))}
     facts = liquidity.profile(conn, obs_date)
     # Carry is quoted at a realistic entry, not the screen mid. The shift is
     # the same for every bond, so it moves the level and not the ranking.
@@ -141,7 +145,7 @@ def show(conn, obs_date: str, top: int) -> None:
         if not subset:
             return
         print(f"\n{title}")
-        header = f"  {'series':<18}{'resid':>8}{'gap':>8}{'z':>7}{'b/o':>6}"
+        header = f"  {'series':<18}{'quote':>8}{'traded':>9}{'resid':>8}{'gap':>8}{'z':>7}{'b/o':>6}"
         if show_auction:                      # the core book carries more
             header += f"{'carry':>7}{'roll':>6}{'per dur':>9}"
         header += f"{'Rs bn':>8}{'days':>6}"
@@ -149,7 +153,15 @@ def show(conn, obs_date: str, top: int) -> None:
         for row in subset:
             spread = spreads.get(row["isin"])
             fact = facts.get(row["isin"], {})
+            # The quote is an indicative mid; `traded` is where the bond last
+            # actually changed hands, with its age, because the two have been
+            # 14-46bp apart and only one of them is a price you can get.
+            quoted = quotes.get(row["isin"])
+            done = fact.get("last_trade_yield")
+            age = fact.get("days_since_trade")
+            traded = (f"{done:.2f}" + (f"/{age}d" if age else "") if done else "-")
             line = (f"  {(row['series_label'] or row['isin']):<18}"
+                    f"{(f'{quoted:.2f}' if quoted else '-'):>8}{traded:>9}"
                     f"{row['residual_bp']:>+8.1f}"
                     f"{row['dislocation_bp']:>+8.1f}{row['zscore']:>7.1f}"
                     f"{(f'{spread:.0f}' if spread else '-'):>6}")
@@ -239,7 +251,12 @@ def show(conn, obs_date: str, top: int) -> None:
             print(f"  {buy:<20}{sell:<20}{abs(row['dislocation_bp']):>8.1f}"
                   f"{row['zscore']:>7.1f}{cost:>7.0f}{shown:>7}  {verdict}")
 
-    print("\nresid = distance from the fitted curve, bp (positive = cheap) | gap = "
+    print("\nquote = the day's indicative mid, which is a midpoint of the PDMO's "
+          "AVERAGE\nbuying and selling prices across dealers — not a level anyone "
+          "must deal on\ntraded = where it last actually changed hands, and how "
+          "long ago. Executed\nlevels have been running well above the screen; "
+          "the bias line at the top\nmeasures that across the market."
+          "\nresid = distance from the fitted curve, bp (positive = cheap) | gap = "
           "from its OWN\nrecent norm | z = that in its own standard deviations | "
           "cost = half the bid-offer\non each leg | exp = historical 10-day "
           "reversion at this z\ncarry = entry yield less funding, bp p.a. | roll = "
