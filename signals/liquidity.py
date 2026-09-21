@@ -45,23 +45,69 @@ MIN_DAYS_TRADED = 10       # under this in the window, treat as untradeable
 BENCHMARK_MIN_DAYS = 8     # a current benchmark clears a lower bar, not none
 BENCHMARK_DAYS = 120       # how recently a bond must have been auctioned
 POST_AUCTION_DAYS = 14     # the window in which auctioned paper sits cheap
+# How far the trade feed may lag before its silence stops being a publication
+# delay and starts being missing data. Inside this, the window is anchored to
+# the last published day so a bond is not penalised for a file that has not
+# appeared. Beyond it, the window must end at the scoring date instead, or a
+# feed that stopped six months ago would keep a dead bond looking liquid
+# forever — which is exactly what a test caught when this was first written.
+MAX_TRADE_DATA_LAG_DAYS = 7
 
 EMPTY = {"turnover_lkr": 0, "n_trades": 0, "days_traded": 0,
          "is_benchmark": False, "last_auction": None, "days_since_auction": None,
          "post_auction": False, "bid_to_cover": None, "tier": "wider",
          "last_trade_date": None, "last_trade_yield": None,
-         "days_since_trade": None}
+         "days_since_trade": None, "trades_through": None,
+         "trade_data_lag_days": None}
+
+
+def last_complete_trade_day(conn, obs_date: str) -> str | None:
+    """The newest day at or before `obs_date` whose trade file has published.
+
+    The two feeds run on different clocks. A day's QUOTES publish the same
+    evening, without exception across every trading day measured; its TRADES
+    publish a day or more later, and on 2026-09-11 that lag stretched to
+    three. So the most recent one to three days in any window ending on
+    `obs_date` have no trade data at all, whatever actually happened in them.
+    """
+    row = conn.execute(
+        """SELECT MAX(obs_date) AS d FROM trade_summary
+            WHERE security_type = 'TBond' AND obs_date <= ?""", (obs_date,)).fetchone()
+    latest = row["d"] if row else None
+    if not latest:
+        return None
+    lag = (dt.date.fromisoformat(obs_date) - dt.date.fromisoformat(latest)).days
+    # Past the cap this is not a late file, it is an absent one, and freezing
+    # the window on it would keep a bond that stopped trading looking liquid.
+    return latest if lag <= MAX_TRADE_DATA_LAG_DAYS else None
 
 
 def profile(conn, obs_date: str) -> dict:
     """{isin: liquidity and auction facts} as of `obs_date`.
 
-    Everything is measured over the window ENDING on obs_date, so a
-    historical date is scored on what was known then, not on today.
+    Nothing here uses information published after `obs_date`, so a historical
+    date is scored on what was knowable then.
+
+    **The two feeds are windowed differently, on purpose.** Auction facts are
+    anchored to `obs_date`, because auction results publish promptly and
+    being on the run is true the day it happens. Trading facts are anchored
+    to the last day whose trade file has actually published, because the
+    newest days in the window are structurally empty rather than quiet.
+
+    That distinction is not cosmetic. `days_traded` feeds tier thresholds at
+    8 and 10 days, which are hard cutoffs. Counting a 60-day window with its
+    last one to three days always blank understates every bond by that much,
+    and on 2026-09-18 four bonds sat within three days of their threshold
+    with one exactly on it. A bond would have been demoted for a file that
+    had not been published yet.
     """
     today = dt.date.fromisoformat(obs_date)
-    start = (today - dt.timedelta(days=WINDOW_DAYS)).isoformat()
     benchmark_start = (today - dt.timedelta(days=BENCHMARK_DAYS)).isoformat()
+    # Trading facts run to the last COMPLETE day, so the window is 60 real
+    # days rather than 60 with holes at the end.
+    trades_through = last_complete_trade_day(conn, obs_date) or obs_date
+    start = (dt.date.fromisoformat(trades_through)
+             - dt.timedelta(days=WINDOW_DAYS)).isoformat()
 
     out: dict[str, dict] = {}
     for row in conn.execute(
@@ -69,7 +115,7 @@ def profile(conn, obs_date: str) -> dict:
                       COUNT(*) AS days_traded
                  FROM trade_summary
                 WHERE obs_date > ? AND obs_date <= ? AND security_type = 'TBond'
-                GROUP BY isin""", (start, obs_date)):
+                GROUP BY isin""", (start, trades_through)):
         out[row["isin"]] = dict(EMPTY, turnover_lkr=row["turnover"] or 0,
                                 n_trades=row["trades"] or 0,
                                 days_traded=row["days_traded"] or 0)
@@ -113,6 +159,9 @@ def profile(conn, obs_date: str) -> dict:
 
     for facts in out.values():
         facts["tier"] = _tier(facts)
+        facts["trades_through"] = trades_through
+        facts["trade_data_lag_days"] = (
+            today - dt.date.fromisoformat(trades_through)).days
     return out
 
 

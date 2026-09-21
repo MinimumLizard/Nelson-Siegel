@@ -317,3 +317,55 @@ def test_the_last_executed_level_never_comes_from_the_future(tmp_path):
     conn.commit()
     facts = liquidity.profile(conn, "2026-09-16")
     assert facts.get("LKB00934J156", {}).get("last_trade_yield") is None
+
+
+def test_trading_window_ends_at_the_last_published_trade_day(tmp_path):
+    """Quotes publish the same evening; trades publish a day or more later.
+    A 60-day window ending on the scoring date therefore has its last one to
+    three days structurally blank, which understates every bond against tier
+    thresholds that are hard cutoffs at 8 and 10 days."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "lag.sqlite")
+    _seed_liquidity(conn, "LKB00934F154", days=12, end="2026-09-17")
+    conn.commit()
+
+    # Scoring Friday, whose trade file has not published yet.
+    facts = liquidity.profile(conn, "2026-09-18")["LKB00934F154"]
+    assert facts["trades_through"] == "2026-09-17"
+    assert facts["trade_data_lag_days"] == 1
+    assert facts["days_traded"] == 12          # a complete 60 days, not 59 with a hole
+
+
+def test_auction_facts_stay_anchored_to_the_scoring_date(tmp_path):
+    """Only the TRADE window moves. Auction results publish promptly, and
+    being on the run is true the day it happens, so shifting those too would
+    misdate the post-auction window."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "lag.sqlite")
+    _seed_liquidity(conn, "LKB00531B017", days=12, end="2026-09-17")
+    conn.commit()
+    db.upsert_auction(conn, "2026-09-18", "LKB00531B017", "auction", "2026-09-22",
+                      11.5, 1_000_000_000, 2_000_000_000, 1_000_000_000, "t")
+    conn.commit()
+
+    facts = liquidity.profile(conn, "2026-09-18")["LKB00531B017"]
+    assert facts["trades_through"] == "2026-09-17"   # trades lag
+    assert facts["days_since_auction"] == 0         # the auction does not
+    assert facts["post_auction"]
+
+
+def test_a_dead_trade_feed_does_not_freeze_liquidity(tmp_path):
+    """The lag anchor is for a late file, not an absent one. Past the cap the
+    window must end at the scoring date again, or a bond that stopped trading
+    six months ago keeps looking liquid forever."""
+    from signals import liquidity
+    conn = db.connect(tmp_path / "lag.sqlite")
+    _seed_liquidity(conn, "LKB00934F154", days=20, end="2026-03-01")
+    conn.commit()
+    # The seeder rolls a weekend date to the next business day, so ask the
+    # database what it actually stored rather than assuming.
+    seeded = conn.execute("SELECT MAX(obs_date) d FROM trade_summary").fetchone()["d"]
+    assert liquidity.last_complete_trade_day(conn, seeded) == seeded
+    assert liquidity.last_complete_trade_day(conn, "2026-09-01") is None
+    assert not liquidity.is_tradeable(
+        liquidity.profile(conn, "2026-09-01").get("LKB00934F154"))

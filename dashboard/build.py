@@ -83,6 +83,7 @@ def gather(conn) -> dict | None:
     money = carry.profile(conn, obs_date, entry_gap_bp=gap["gap_bp"] if gap else 0.0)
     funding = carry.funding_rate(conn, obs_date)
     reversion = reversion_table(conn)
+    trades_through = liquidity.last_complete_trade_day(conn, obs_date) or obs_date
     quotes = {r["isin"]: r["mid_yield"] for r in conn.execute(
         """SELECT isin, mid_yield FROM observations WHERE obs_date=?
              AND source='pdmo_daily' AND mid_yield IS NOT NULL""", (obs_date,))}
@@ -104,6 +105,7 @@ def gather(conn) -> dict | None:
         "waiting": waiting, "liquidity": facts, "labels": labels,
         "carry": money, "funding": funding, "gap": gap,
         "reversion": reversion, "quotes": quotes,
+        "trades_through": trades_through,
         "coverage": dict(coverage),
         "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
@@ -519,6 +521,7 @@ def render(data, fragment: bool = False) -> str:
     head = ('<th>series</th><th>gap bp</th><th>z</th><th>b/o</th>'
             '<th title="turnover over the last 60 days">Rs bn</th><th></th>')
     has_trades = any(r["source"] == "trade" for r in data["residuals"])
+    trades_through = data.get("trades_through") or data["obs_date"]
     gap_shift = (
         f'over the last {gap["window_days"]} days trades printed {abs(gap["gap_bp"]):.0f}bp '
         f'{"cheaper" if gap["gap_bp"] > 0 else "richer"} than the quote mid'
@@ -591,7 +594,9 @@ def render(data, fragment: bool = False) -> str:
      {gap_shift}. That shift is the same for every bond, so it moves the level
      of carry and not the ordering.</p>
   <p class="foot"><b>Rs bn</b> and <b>days</b> are turnover and days traded over
-     the last {liquidity.WINDOW_DAYS} · <b>auction</b> is days since this bond
+     the {liquidity.WINDOW_DAYS} days to {trades_through}, the last day whose trade
+     file has published — the quote columns run to {data["obs_date"]}, because the
+     two feeds publish on different clocks · <b>auction</b> is days since this bond
      was last sold, <span class="hot">highlighted</span> inside the
      {liquidity.POST_AUCTION_DAYS}-day window in which freshly auctioned paper
      has sat about 5bp cheap to its own norm · <b>cover</b> is bids over the
