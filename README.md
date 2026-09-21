@@ -341,6 +341,21 @@ Tradeable bonds that do not yet have 30 days of residual history — which is
 exactly what a freshly auctioned benchmark looks like — are named separately
 with the history they do have, rather than silently dropped.
 
+### The two feeds run on different clocks
+
+A day's quotes publish the same evening; its executed trades publish a day
+or more later, and that has stretched to three. So the trade feed's most
+recent days are structurally blank, and counting them as zero understates
+every bond against tier thresholds that are hard cutoffs.
+
+`signals/liquidity.py` therefore windows the feeds separately: auction facts
+anchor to the scoring date, trading facts to the last day whose trade file
+has actually published. Both surfaces name both dates rather than letting
+the columns look like they share one. A seven-day cap stops the anchor from
+freezing a dead feed into permanent liquidity. Details and the measured
+effect, which is small and confined to the live reading, are in
+`docs/DATA_NOTES.md`.
+
 ### The auction cycle
 
 Testing the 15 auctions in this data for the classic pre-auction concession

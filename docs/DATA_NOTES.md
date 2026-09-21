@@ -705,3 +705,63 @@ rule invented from a single confounded data point, about a schedule the
 PDMO has already changed once. It now says only that the trades are pending
 and the next run will collect them, which is true whatever the lag turns
 out to be.
+
+
+## Two feeds, two clocks, two windows
+
+The PDMO publishes quotes and executed trades on different schedules, and
+the difference is structural rather than occasional:
+
+    quote sheet for day D    published the same evening, 0d lag on all 12
+                             trading days measured cleanly
+    trade file for day D     1d normally; 3d on 2026-09-11; 3d and counting
+                             for 2026-09-18
+
+So any window ending on the scoring date has its most recent one to three
+days blank in the trade feed, whatever actually happened in them. That is
+not a quiet market, it is an unpublished file, and counting it as zero
+understates every bond.
+
+It matters because `days_traded` feeds tier thresholds that are hard
+cutoffs: 8 days for a benchmark, 10 for active. On 2026-09-18 four bonds sat
+within three days of their threshold and 11.25%2026A sat exactly on it. A
+bond could be demoted for a file that had not been published.
+
+`liquidity.profile` therefore windows the two feeds differently on purpose:
+
+* **auction facts** anchor to the scoring date, because auction results
+  publish promptly and being on the run is true the day it happens;
+* **trading facts** anchor to `last_complete_trade_day`, the newest day whose
+  trade file has actually published, so the window is 60 real days rather
+  than 60 with holes at the end.
+
+Both `trades_through` and `trade_data_lag_days` are returned, and the report
+and dashboard name both dates rather than letting a reader assume the
+columns share one.
+
+### The cap, and why a test forced it
+
+The first version anchored to the last published day unconditionally, and a
+test that had been in the suite for weeks caught the flaw immediately: a
+bond whose trades stopped in March still looked liquid in September, because
+the window kept sliding back to March with it. An absent feed is not a late
+one.
+
+`MAX_TRADE_DATA_LAG_DAYS = 7` draws the line. Inside a week, the anchor
+holds and a bond is not penalised for a missing file. Past it, the window
+ends at the scoring date again and stale bonds correctly drop out.
+
+### How much did it change?
+
+Almost nothing historically, and that is the honest summary. Of the 195
+stored curve days, 193 had their own trade file present at scoring time,
+because the backfill ran after publication:
+
+    lag 0d : 193 days
+    lag 1d :   1 day
+    lag 3d :   1 day
+
+Across the last 40 days the fix moved `days_traded` on 4 bond-days and
+changed **no** tiers. Its value is entirely on the live edge — the single
+reading anyone actually makes a decision from — rather than in the stored
+history, which was already honest.

@@ -123,6 +123,9 @@ def show(conn, obs_date: str, top: int) -> None:
             WHERE obs_date = ? AND source = 'pdmo_daily'
               AND mid_yield IS NOT NULL""", (obs_date,))}
     facts = liquidity.profile(conn, obs_date)
+    # Trading figures run to the last day whose trade file has published; the
+    # quote columns run to obs_date. Naming both stops a reader assuming one.
+    trades_through = liquidity.last_complete_trade_day(conn, obs_date) or obs_date
     # Carry is quoted at a realistic entry, not the screen mid. The shift is
     # the same for every bond, so it moves the level and not the ranking.
     money_facts = carry.profile(conn, obs_date,
@@ -262,9 +265,12 @@ def show(conn, obs_date: str, top: int) -> None:
           "reversion at this z\ncarry = entry yield less funding, bp p.a. | roll = "
           "price gain from ageing down\nthe curve | per dur = the two together per "
           "year of duration, which is the only\none of them that is not mostly a "
-          "bet on duration\nRs bn / days = turnover and days traded in the last "
-          f"{liquidity.WINDOW_DAYS} | auction = days since it was\nlast sold | "
-          f"* = inside the {liquidity.POST_AUCTION_DAYS}-day post-auction window")
+          f"bet on duration\nRs bn / days = turnover and days traded over the "
+          f"{liquidity.WINDOW_DAYS} days to {trades_through} — the last day\nwhose "
+          f"trade file has published. The quote columns run to {obs_date}; the two "
+          f"feeds\npublish on different clocks.\nauction = days since it was last "
+          f"sold | * = inside the "
+          f"{liquidity.POST_AUCTION_DAYS}-day post-auction window")
     if hidden:
         print(f"{hidden} scored bond(s) not shown: quoted wider than "
               f"{MAX_TRADEABLE_SPREAD_BP:.0f}bp, or traded on fewer than "
