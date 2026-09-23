@@ -341,6 +341,15 @@ Tradeable bonds that do not yet have 30 days of residual history — which is
 exactly what a freshly auctioned benchmark looks like — are named separately
 with the history they do have, rather than silently dropped.
 
+### Executed marks are carried forward, labelled
+
+Because the trade file lags, the newest day usually has no executed trades,
+and the chart used to show none at all on exactly the day a reader opens.
+Each bond's last known print is now carried forward as a **hollow** diamond,
+tipped with its own date and age, beside the solid diamonds of that day's
+own trades. Past ten days a print is dropped rather than carried: that is a
+bond not trading, not a file running late.
+
 ### The two feeds run on different clocks
 
 A day's quotes publish the same evening; its executed trades publish a day

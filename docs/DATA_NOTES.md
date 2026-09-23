@@ -765,3 +765,35 @@ Across the last 40 days the fix moved `days_traded` on 4 bond-days and
 changed **no** tiers. Its value is entirely on the live edge — the single
 reading anyone actually makes a decision from — rather than in the stored
 history, which was already honest.
+
+
+## The chart lost its executed marks on exactly the day you look at it
+
+The trade file publishes a day or more behind the quote sheet, so the newest
+day — the one anyone actually opens — usually has no executed trades at all.
+The chart drew trade marks only for the day being charted, so on those days
+it showed 53 quote dots and **zero** trade diamonds. On 2026-09-22 that is
+precisely what happened.
+
+That is the worst place to lose them. The chart exists to compare where
+dealers quote against where paper changes hands, and it was dropping half of
+that comparison on every newest day.
+
+Each bond's last known print is now carried forward instead:
+
+* **solid diamond** — this day's own executed trade
+* **hollow diamond** — the last known print for a bond whose newer trades
+  have not published, tipped with its own date and age
+
+Open rather than filled, so a carried level can never be mistaken for
+today's, and the legend counts them.
+
+`CARRY_FORWARD_MAX_DAYS = 10` bounds it. The gap this bridges is a
+publication delay, which has reached three days. Past ten a bond has not
+been waiting on a file, it has not been trading, and its last level is no
+longer where anyone would deal — so the mark is dropped rather than shown.
+
+A bond whose print is dated the scoring day is never carried, even when the
+curve has not been refit to include it yet. That is a same-day trade waiting
+on a refit, and calling it "carried forward" would mislabel it in the one
+direction this mark exists to prevent. A test caught that case.

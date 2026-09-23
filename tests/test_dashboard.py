@@ -167,3 +167,49 @@ def test_a_bond_is_never_both_cheap_and_rich(seeded):
     for row in signals:
         side = cheap if row["zscore"] >= 0 else rich
         assert row["series_label"] in side
+
+
+def test_executed_marks_survive_a_day_whose_trade_file_has_not_published(seeded):
+    """The trade file runs a day or more behind the quote sheet, so on the
+    newest day — the one anyone actually opens — the chart had no executed
+    marks at all. They vanished from the single view built to compare quotes
+    against trades. Each bond's last known print is carried forward instead."""
+    day = build.gather(seeded)["obs_date"]
+    # The day's trade file has not published: no trade rows at all for it.
+    seeded.execute("DELETE FROM curve_residuals WHERE obs_date=? AND source='trade'", (day,))
+    seeded.execute("DELETE FROM trade_summary WHERE obs_date=?", (day,))
+    seeded.commit()
+
+    data = build.gather(seeded)
+    assert not any(r["source"] == "trade" for r in data["residuals"])   # none today
+    assert data["carried_trades"]                                       # but marks remain
+    page = build.render(data)
+    assert 'class="trade carried"' in page
+    assert "carried forward" in page
+    # Every carried mark names its own date and age, so it cannot read as today's.
+    for row in data["carried_trades"]:
+        assert row["obs_date"] < day
+        assert f'last traded {row["obs_date"]}' in page
+
+
+def test_a_bond_that_traded_today_is_not_also_carried(seeded):
+    """One bond, one mark. A solid diamond and a hollow one at the same point
+    would read as two prints."""
+    data = build.gather(seeded)
+    traded_today = {r["isin"] for r in data["residuals"] if r["source"] == "trade"}
+    carried = {r["isin"] for r in data["carried_trades"]}
+    assert not (traded_today & carried)
+
+
+def test_a_stale_print_is_not_resurrected(seeded):
+    """Carrying forward bridges a publication gap, not a bond that stopped
+    trading. Past the cap the mark is dropped rather than shown at a level
+    nobody would deal on now."""
+    day = build.gather(seeded)["obs_date"]
+    seeded.execute("DELETE FROM curve_residuals WHERE obs_date=? AND source='trade'", (day,))
+    # Every print is now months old rather than days.
+    seeded.execute("DELETE FROM trade_summary")
+    db.upsert_trade_summary(seeded, "2026-01-02", "LKB00934F154", "TBond",
+                            None, None, None, None, 11.0, 1_000_000_000, 1, "t")
+    seeded.commit()
+    assert build.gather(seeded)["carried_trades"] == []
