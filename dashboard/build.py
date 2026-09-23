@@ -84,6 +84,7 @@ def gather(conn) -> dict | None:
     funding = carry.funding_rate(conn, obs_date)
     reversion = reversion_table(conn)
     trades_through = liquidity.last_complete_trade_day(conn, obs_date) or obs_date
+    carried_trades = _carried_trades(residuals, facts)
     quotes = {r["isin"]: r["mid_yield"] for r in conn.execute(
         """SELECT isin, mid_yield FROM observations WHERE obs_date=?
              AND source='pdmo_daily' AND mid_yield IS NOT NULL""", (obs_date,))}
@@ -105,11 +106,47 @@ def gather(conn) -> dict | None:
         "waiting": waiting, "liquidity": facts, "labels": labels,
         "carry": money, "funding": funding, "gap": gap,
         "reversion": reversion, "quotes": quotes,
-        "trades_through": trades_through,
+        "trades_through": trades_through, "carried_trades": carried_trades,
         "coverage": dict(coverage),
         "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
     }
+
+
+# How stale a print may be and still be carried onto the chart. The gap this
+# bridges is the trade file publishing a day or more behind the quote sheet,
+# which has reached three days. Past this a bond has not simply been waiting
+# on a file, it has not been trading, and its last level is no longer where
+# anyone would deal.
+CARRY_FORWARD_MAX_DAYS = 10
+
+
+def _carried_trades(residuals, facts) -> list[dict]:
+    """Each bond's last known print, for bonds with none published today.
+
+    Without this the chart loses every executed mark on any day whose trade
+    file has not landed — which is most days, and always the newest one. The
+    marks are drawn open and tipped with their own date, so a carried level
+    reads as what it is rather than as today's.
+    """
+    traded_today = {row["isin"] for row in residuals if row["source"] == "trade"}
+    tau = {row["isin"]: row["tau_years"] for row in residuals
+           if row["source"] == "quote"}
+    out = []
+    for isin, fact in facts.items():
+        age = fact.get("days_since_trade")
+        # age 0 means the bond DID print today, even if the curve has not been
+        # refit to include it yet. That is a same-day trade waiting on a
+        # refit, not a carried one, and labelling it "carried forward" would
+        # be wrong in the one direction this mark exists to avoid.
+        if (isin in traded_today or isin not in tau
+                or fact.get("last_trade_yield") is None
+                or not age or age > CARRY_FORWARD_MAX_DAYS):
+            continue
+        out.append({"isin": isin, "tau_years": tau[isin],
+                    "observed_yield": fact["last_trade_yield"],
+                    "obs_date": fact["last_trade_date"], "days_ago": age})
+    return out
 
 
 def _waiting(conn, obs_date, facts) -> list[dict]:
@@ -230,14 +267,33 @@ def curve_svg(data) -> str:
                      f'cy="{sy(row["observed_yield"]):.1f}" r="{radius:.1f}" '
                      f'data-tip="{html.escape(tip)}"><title>{html.escape(tip)}</title></circle>')
 
-    # Executed trades, held out of the fit.
+    def diamond(tau, yield_pct, css, tip):
+        x, y = sx(tau), sy(yield_pct)
+        return (f'<path class="{css}" d="M {x:.1f} {y - 6:.1f} L {x + 6:.1f} {y:.1f} '
+                f'L {x:.1f} {y + 6:.1f} L {x - 6:.1f} {y:.1f} Z" '
+                f'data-tip="{html.escape(tip)}"><title>{html.escape(tip)}</title></path>')
+
+    # Executed trades, held out of the fit. Solid: this day's own prints.
     for row in (r for r in residuals if r["source"] == "trade"):
-        x, y = sx(row["tau_years"]), sy(row["observed_yield"])
-        tip = (f'{row["isin"]} traded · {row["tau_years"]:.1f}y · '
-               f'{row["observed_yield"]:.2f}% · {row["residual_bp"]:+.0f}bp vs curve')
-        parts.append(f'<path class="trade" d="M {x:.1f} {y - 6:.1f} L {x + 6:.1f} {y:.1f} '
-                     f'L {x:.1f} {y + 6:.1f} L {x - 6:.1f} {y:.1f} Z" '
-                     f'data-tip="{html.escape(tip)}"><title>{html.escape(tip)}</title></path>')
+        parts.append(diamond(
+            row["tau_years"], row["observed_yield"], "trade",
+            f'{labels.get(row["isin"]) or row["isin"]} traded · '
+            f'{row["tau_years"]:.1f}y · {row["observed_yield"]:.2f}% · '
+            f'{row["residual_bp"]:+.0f}bp vs curve'))
+
+    # Hollow: the last known print for a bond whose newer trades have not been
+    # published yet. The trade file runs a day or more behind the quote sheet,
+    # so on most days this chart would otherwise show no executed levels at
+    # all — the marks simply vanish on the one view built to compare them.
+    # Carried forward with its date, and drawn open so it can never be mistaken
+    # for today's, rather than dropped or silently redated.
+    for row in data.get("carried_trades", []):
+        parts.append(diamond(
+            row["tau_years"], row["observed_yield"], "trade carried",
+            f'{labels.get(row["isin"]) or row["isin"]} last traded '
+            f'{row["obs_date"]} ({row["days_ago"]}d ago) · '
+            f'{row["observed_yield"]:.2f}% · not yet published for '
+            f'{data["obs_date"]}'))
 
     parts.append(f'<text class="axis-label" x="{(left + right) / 2:.0f}" '
                  f'y="{CHART_HEIGHT - 6}" text-anchor="middle">years to maturity</text>')
@@ -276,6 +332,7 @@ h2 { font-size: 15px; margin: 32px 0 10px; }
          stroke-width: 2; }
 .quote.core { fill: var(--ink-2); fill-opacity: .95; }
 .trade { fill: var(--series-2); stroke: var(--surface); stroke-width: 2; }
+.trade.carried { fill: none; stroke: var(--series-2); stroke-width: 2; }
 .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--ink-2);
           font-size: 12px; margin-top: 10px; }
 .legend i { display: inline-block; width: 11px; height: 11px; margin-right: 6px;
@@ -554,6 +611,11 @@ def render(data, fragment: bool = False) -> str:
     # silently killed the out-of-sample check, so the page states what is true
     # (these are pending, and the next run will collect them) rather than a
     # calendar date the PDMO has already moved once.
+    carried = len(data.get("carried_trades", []))
+    carried_key = (f'<span><i style="border:2px solid var(--series-2);'
+                   f'background:none"></i>last known trade, carried forward '
+                   f'({carried} bond(s), not yet published for '
+                   f'{data["obs_date"]})</span>' if carried else "")
     trade_key = ('<span><i style="background:var(--series-2)"></i>executed trades, '
                  'held out of the fit</span>' if has_trades else
                  f'<span class="muted-key">executed trades for {data["obs_date"]} '
@@ -574,6 +636,7 @@ def render(data, fragment: bool = False) -> str:
       <span><i style="background:var(--ink-2)"></i>core book (size = weight in the fit)</span>
       <span><i style="background:var(--muted);opacity:.38"></i>the rest of the market, also fitted</span>
       {trade_key}
+      {carried_key}
     </div>
   </div>
 
