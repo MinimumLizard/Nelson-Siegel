@@ -8,6 +8,7 @@ duration adjustment is what discriminates between bonds.
 """
 
 import datetime as dt
+import math
 
 import pytest
 
@@ -196,3 +197,48 @@ def test_bill_isins_decode_and_round_trip():
     assert isin.decode_bill(built) == (364, dt.date(2027, 8, 27))
     assert isin.decode_bill("LKB00934F154") is None      # a bond, not a bill
     assert isin.decode_bill("LKA36427H270") is None      # bad check digit
+
+
+# ---------------------------------------------------------------------------
+# Duration must be dated from maturity, not rounded to whole periods
+# ---------------------------------------------------------------------------
+
+def _exact_duration(yield_pct, coupon_pct, tau, freq=2):
+    """Reference: cash flows at their real times, counted back from maturity."""
+    periods = math.ceil(tau * freq - 1e-9)
+    times = [t for t in (tau - k / freq for k in range(periods - 1, -1, -1)) if t > 1e-9]
+    rate = yield_pct / 100.0 / freq
+    price = sum((coupon_pct / freq + (100.0 if i == len(times) - 1 else 0.0))
+                / (1 + rate) ** (t * freq) for i, t in enumerate(times))
+    weighted = sum(t * (coupon_pct / freq + (100.0 if i == len(times) - 1 else 0.0))
+                   / (1 + rate) ** (t * freq) for i, t in enumerate(times))
+    return weighted / price / (1 + rate)
+
+
+@pytest.mark.parametrize("yield_pct,coupon,tau", [
+    (11.76, 11.70, 8.06),    # a core benchmark, mid coupon period
+    (12.14, 10.75, 10.77),
+    (12.28, 12.50, 18.45),   # the long end
+    (9.20, 11.25, 0.23),     # three months left: the old rounding doubled this
+    (10.00, 10.00, 5.00),    # exactly on a coupon date
+])
+def test_duration_matches_exact_cash_flow_timing(yield_pct, coupon, tau):
+    """Rounding a bond to a whole number of half-years assumes it matures on a
+    coupon date. It overstated duration by 4-5% on the core book and by 117%
+    on a bond with three months left — and `per_duration_bp` divides by it."""
+    _, duration = carry.price_and_duration(yield_pct, coupon, tau)
+    assert duration == pytest.approx(_exact_duration(yield_pct, coupon, tau), abs=1e-6)
+
+
+def test_duration_is_shorter_than_maturity_and_rises_with_it():
+    _, short = carry.price_and_duration(11.0, 11.0, 4.0)
+    _, long = carry.price_and_duration(11.0, 11.0, 10.0)
+    assert 0 < short < 4.0 and 0 < long < 10.0
+    assert long > short
+
+
+def test_per_duration_is_a_number_the_page_can_format(priced):
+    """The dashboard formats this with :.0f, so None would raise rather than
+    render a dash."""
+    facts = carry.profile(priced, "2026-09-02")[BOND]
+    assert isinstance(facts["per_duration_bp"], float)

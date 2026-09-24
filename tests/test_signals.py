@@ -369,3 +369,36 @@ def test_a_dead_trade_feed_does_not_freeze_liquidity(tmp_path):
     assert liquidity.last_complete_trade_day(conn, "2026-09-01") is None
     assert not liquidity.is_tradeable(
         liquidity.profile(conn, "2026-09-01").get("LKB00934F154"))
+
+
+def test_reversion_horizon_is_counted_in_days_not_rows(tmp_path):
+    """`shift(-10)` looks ten OBSERVATIONS ahead. A pair that missed a day is
+    then measured over eleven or twelve — on the real data a ten-row shift
+    spanned exactly ten business days only 45% of the time. Reversion grows
+    with horizon, so a row-indexed reading overstates the capture and the
+    label stops describing the number."""
+    dates = list(pd.bdate_range("2026-01-01", periods=40))
+    # Drop a day in the middle, so row 10 ahead is NOT 10 business days ahead.
+    dates.pop(5)
+    frame = pd.DataFrame({
+        "obs_date": dates,
+        "spread_bp": [float(i) for i in range(len(dates))],
+        "zscore": [3.0] * len(dates),
+    })
+    forward = signal_run._forward_change(frame)
+
+    # The spread rises by exactly 1 per OBSERVATION, so a row-indexed reading
+    # would give 10 everywhere. Date-indexed it gives 10 only where the ten
+    # business days really contain ten observations.
+    measured = [v for v in forward if v == v]          # drop the NaN tail
+    assert measured, "no forward readings at all"
+    assert any(v != 10.0 for v in measured), "still row-indexed, not date-indexed"
+
+
+def test_reversion_returns_nothing_rather_than_guessing_across_a_long_gap(tmp_path):
+    """No observation near the target date means no reading, not the nearest
+    one from a month away."""
+    frame = pd.DataFrame({
+        "obs_date": [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-06-01")],
+        "spread_bp": [10.0, 40.0], "zscore": [3.0, 3.0]})
+    assert all(v != v for v in signal_run._forward_change(frame))   # all NaN

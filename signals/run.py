@@ -66,6 +66,39 @@ def rebuild(conn) -> dict:
     return {"bond_signals": len(bonds), "switch_signals": len(switches)}
 
 
+# A pair may be missing an observation, so the row N places later is not the
+# row N business days later. Allow a short search forward from the target date
+# before giving up on a reading.
+REVERSION_TOLERANCE_DAYS = 4
+
+
+def _forward_change(group) -> list:
+    """Change in the pair spread REVERSION_HORIZON_DAYS business days later.
+
+    Indexed by date rather than by row. `shift(-10)` looks ten OBSERVATIONS
+    ahead, and a pair that missed a day is then measured over eleven or
+    twelve — on this data a ten-row shift spanned exactly ten business days
+    only 45% of the time, a median of eleven, and up to fourteen. Reversion
+    grows with horizon, so a row-indexed reading quietly overstates what a
+    ten-day capture is worth and the label stops describing the number.
+    """
+    import datetime as dt
+
+    by_date = dict(zip(group.obs_date, group.spread_bp))
+    offset = pd.tseries.offsets.BDay(REVERSION_HORIZON_DAYS)
+    out = []
+    for when, spread in zip(group.obs_date, group.spread_bp):
+        target = when + offset
+        found = None
+        for slip in range(REVERSION_TOLERANCE_DAYS + 1):
+            candidate = target + dt.timedelta(days=slip)
+            if candidate in by_date:
+                found = by_date[candidate]
+                break
+        out.append(float("nan") if found is None else found - spread)
+    return out
+
+
 def measure_reversion(conn, switches) -> dict:
     """How far a pair spread actually came back, per z threshold.
 
@@ -84,8 +117,7 @@ def measure_reversion(conn, switches) -> dict:
     forward = []
     for _, group in frame.groupby("pair"):
         group = group.sort_values("obs_date").copy()
-        group["forward"] = (group.spread_bp.shift(-REVERSION_HORIZON_DAYS)
-                            - group.spread_bp)
+        group["forward"] = _forward_change(group)
         forward.append(group)
     measured = pd.concat(forward).dropna(subset=["forward"])
     if measured.empty:
