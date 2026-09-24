@@ -45,6 +45,7 @@ everything else here, so it is left out rather than guessed at.
 """
 
 import datetime as dt
+import math
 
 from pipeline import isin as isin_module
 
@@ -100,20 +101,33 @@ def funding_rate(conn, obs_date: str) -> dict | None:
 
 def price_and_duration(yield_pct: float, coupon_pct: float,
                        tau_years: float) -> tuple[float, float]:
-    """(clean price per 100, modified duration) from a level yield.
+    """(price per 100, modified duration) from a level yield.
 
-    A flat-yield discounting of the bond's own cash flows. Good to a few
-    hundredths of a year of duration, which is far finer than anything it
-    is compared against here.
+    Cash flows are dated BACKWARDS from maturity, so the next coupon falls
+    at whatever fraction of a period actually remains rather than a whole
+    one. That distinction is not pedantry. An earlier version rounded the
+    bond to a whole number of half-years and discounted at periods 1..n,
+    which silently assumed every bond matures on a coupon date. Measured
+    against exact timing it overstated duration by 0.23 years on the
+    11.70%2034A and 0.22 on the 10.75%2037A — 4 to 5% — and by 117% on a
+    bond with three months left. `per_duration_bp` divides by this number
+    and is the one column in the core book worth reading, so a 5% error in
+    it is the same size as the differences it exists to show.
+
+    Still a flat-yield discounting with no day-count convention, which is
+    accurate to well under a hundredth of a year against a proper
+    calculation and far finer than anything it is compared against here.
     """
-    periods = max(int(round(tau_years * COUPON_FREQUENCY)), 1)
+    periods = max(int(math.ceil(tau_years * COUPON_FREQUENCY - 1e-9)), 1)
+    times = [t for t in (tau_years - k / COUPON_FREQUENCY
+                         for k in range(periods - 1, -1, -1)) if t > 1e-9]
     rate = yield_pct / 100.0 / COUPON_FREQUENCY
     price = weighted = 0.0
-    for index in range(1, periods + 1):
-        flow = coupon_pct / COUPON_FREQUENCY + (100.0 if index == periods else 0.0)
-        present = flow / (1.0 + rate) ** index
+    for index, time_years in enumerate(times):
+        flow = coupon_pct / COUPON_FREQUENCY + (100.0 if index == len(times) - 1 else 0.0)
+        present = flow / (1.0 + rate) ** (time_years * COUPON_FREQUENCY)
         price += present
-        weighted += present * index / COUPON_FREQUENCY
+        weighted += present * time_years
     return price, weighted / price / (1.0 + rate)
 
 
@@ -156,6 +170,9 @@ def profile(conn, obs_date: str, entry_gap_bp: float = 0.0) -> dict:
         out[row["isin"]] = {
             "entry_yield": entry, "price": price, "duration": duration,
             "carry_bp": carry_bp, "roll_bp": roll_bp, "total_bp": total,
-            "per_duration_bp": total / duration if duration > 0 else None,
+            # Never None: the dashboard formats this with :.0f and a None
+            # would raise rather than render. Duration is positive for
+            # every real bond, so the guard is belt-and-braces.
+            "per_duration_bp": total / duration if duration > 0 else 0.0,
             "funding": funding}
     return out

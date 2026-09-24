@@ -459,11 +459,15 @@ def _core_rows(core, spreads, facts, money=None, quotes=None) -> str:
         done, age = fact.get("last_trade_yield"), fact.get("days_since_trade")
         traded = (f'{done:.2f}<span class="age">{age}d</span>' if done and age
                   else f'{done:.2f}' if done else "–")
+        # One append, one row. An earlier version split this across two
+        # appends with a conditional expression spanning the first — it
+        # happened to emit valid HTML, but a ternary wrapping a whole row is
+        # exactly the shape that once swallowed four cells when a value was
+        # missing, so the branch is confined to the one cell it concerns.
+        quote_cell = f"{quoted:.2f}" if quoted is not None else "–"
         out.append(
             f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td>'
-            f'<td>{quoted:.2f}</td>' if quoted else
-            f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td><td>–</td>')
-        out.append(
+            f'<td>{quote_cell}</td>'
             f'<td>{traded}</td>'
             f'<td>{gap:+.1f}</td><td>{row["zscore"]:.1f}</td>'
             f'<td>{spread_cell}</td>'

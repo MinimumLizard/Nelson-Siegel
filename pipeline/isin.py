@@ -107,6 +107,13 @@ def synthetic_key(coupon_pct: float, maturity: date) -> str:
     guess here can only SPLIT one bond into two keys, never merge two bonds
     into one — and a split loses history where a merge corrupts it.
     """
+    if coupon_pct is None:
+        # The caller checked the label parses to exactly one coupon, which
+        # means the parser derived one — but the check reads `series_label`
+        # and the parser fills `coupon_pct` from `printed_label`. Two
+        # functions reading different fields is how the step-coupon `notes`
+        # flag went wrong before, so this refuses rather than assuming.
+        raise ValueError("a synthetic key needs a coupon; none was parsed")
     return f"{SYNTHETIC_PREFIX}{maturity.isoformat()}:{coupon_pct:.3f}"
 
 

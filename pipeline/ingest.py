@@ -214,6 +214,8 @@ def _admissible_without_isin(quote) -> bool:
     """
     if len(series.coupon_steps(quote["series_label"])) != 1:
         return False                       # step-coupon: not one yield axis
+    if quote["coupon_pct"] is None:
+        return False                       # nothing to key the cash flows on
     bid, offer = quote["bid_yield"], quote["offer_yield"]
     if bid is None or offer is None:
         return False                       # one-way: no price to believe

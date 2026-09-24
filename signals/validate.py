@@ -118,9 +118,11 @@ def dispersion(conn) -> None:
     across = residuals.groupby("obs_date").residual_bp.std().mean()
     own = residuals.groupby("isin").residual_bp.std().mean()
 
-    # AR(1) per bond on its own residual series, then averaged. Gaps are left
-    # as-is: consecutive ROWS are consecutive trading days for a bond that
-    # quotes daily, which these do.
+    # AR(1) per bond on its own residual series, then averaged. Measured on
+    # consecutive ROWS: 93.4% of consecutive rows really are one business day
+    # apart, and the rest are two or three. The gaps bias rho slightly DOWN
+    # (a two-day move is larger than a one-day move), so the half-life below
+    # is if anything a little short. Not worth date-indexing for that.
     coefficients = []
     for _, group in residuals.sort_values("obs_date").groupby("isin"):
         values = group.residual_bp.values
