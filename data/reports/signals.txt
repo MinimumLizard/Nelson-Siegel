@@ -1,7 +1,7 @@
 
 LKR government bond relative value — 2026-09-30
-curve: 53 bonds, fit RMSE 5.3bp, lambda 2.82y; vs 11 trades bias +8.7bp
-vs executed trades: +8.7bp bias over 11 trades on 2026-09-30
+curve: 53 bonds, fit RMSE 5.3bp, lambda 2.82y; vs 11 trades bias +9.5bp
+vs executed trades: +9.5bp bias over 11 trades on 2026-09-30
 execution: trades printing 19bp cheaper than the quote mid over the last 20 days (n=168)
 funding: 9.95% = 9.90% 12m bill + 5bp
 

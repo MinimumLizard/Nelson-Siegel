@@ -18,15 +18,33 @@ on:
     # 20:00 UTC = 01:30 in Colombo the next morning, comfortably after the
     # day's reports are posted. Cron here is always in UTC.
     - cron: "0 20 * * *"
+    # A second attempt, because GitHub does not run a scheduled workflow at
+    # the time you ask for it. Measured starts for the 20:00 cron over two
+    # weeks: 22:00, 22:05, 22:08, 22:17, 22:36, 22:36, 22:44, 22:56, 23:19,
+    # 23:22 — and once at 00:06 the FOLLOWING day, four hours late. The
+    # delay is queueing on shared runners and is documented behaviour, not
+    # something this file can fix.
+    #
+    # So the page's freshness is bounded by a second run rather than by the
+    # first one being punctual. This is safe to duplicate: the job ingests
+    # only files it has not parsed, and the commit step is a no-op when
+    # nothing changed, so a second run on a day the first one handled makes
+    # no commit at all. The `concurrency` group below stops the two from
+    # ever pushing at once.
+    - cron: "0 2 * * *"
   workflow_dispatch:
 
 # The job commits back to the repo, so it needs write access to contents.
 permissions:
   contents: write
 
-# Never let two runs (say a manual one and the scheduled one) push at once.
+# Never let two runs (say a manual one and either scheduled one) push at once.
+# `cancel-in-progress: false` is the default, but it is spelled out because
+# the two crons above depend on it: the later run must WAIT for the earlier
+# one and then find nothing to do, not kill it half way through a commit.
 concurrency:
   group: daily-pdmo-update
+  cancel-in-progress: false
 
 jobs:
   update:

@@ -213,3 +213,73 @@ def test_a_stale_print_is_not_resurrected(seeded):
                             None, None, None, None, 11.0, 1_000_000_000, 1, "t")
     seeded.commit()
     assert build.gather(seeded)["carried_trades"] == []
+
+
+def test_a_quiet_bond_is_not_described_as_unpublished_data(seeded):
+    """"Nobody dealt in it" and "the file has not arrived" are different facts.
+
+    The page used to assert the second one for every carried mark, whatever
+    the feed was doing. Since 2026-09-21 the trade file has mostly landed the
+    same evening, so the wrong branch was the one on screen: on 2026-09-29 it
+    told the reader 13 bonds were "not yet published" on a day whose file had
+    published in full with 9 bonds in it. That inverts the thing the carried
+    marks exist to show — a quiet session reads as a broken feed.
+    """
+    day = build.gather(seeded)["obs_date"]
+    # The file for `day` HAS published: keep it, but only for one bond. Every
+    # other bond is quiet, with a print from an earlier day to carry forward.
+    seeded.execute(
+        "DELETE FROM trade_summary WHERE obs_date=? AND isin<>'LKB00527I150'", (day,))
+    seeded.execute(
+        "DELETE FROM curve_residuals WHERE obs_date=? AND source='trade' "
+        "AND isin<>'LKB00527I150'", (day,))
+    seeded.commit()
+
+    data = build.gather(seeded)
+    assert data["published_through"] == day      # the file is here
+    assert build._trade_feed_lag(data) == 0
+    assert data["carried_trades"]                # and other bonds are just quiet
+
+    page = build.render(data)
+    assert f"no trade on {day}" in page
+    assert "not yet published" not in page
+
+
+def test_an_unpublished_day_still_says_so(seeded):
+    """The other branch has to keep working: with no file for the day, the
+    page must not claim these bonds failed to trade."""
+    day = build.gather(seeded)["obs_date"]
+    seeded.execute("DELETE FROM trade_summary WHERE obs_date=?", (day,))
+    seeded.execute(
+        "DELETE FROM curve_residuals WHERE obs_date=? AND source='trade'", (day,))
+    seeded.commit()
+
+    data = build.gather(seeded)
+    assert data["published_through"] < day
+    assert build._trade_feed_lag(data) > 0
+    page = build.render(data)
+    assert f"not yet published for {day}" in page
+    assert f"no trade on {day}" not in page
+
+
+def test_a_dead_feed_is_never_read_as_a_quiet_market(seeded):
+    """The corner the fix had to avoid.
+
+    `liquidity.last_complete_trade_day` gives up past a 7-day lag so a feed
+    that stopped cannot keep a bond looking liquid, and the dashboard's
+    fallback then makes `trades_through` equal the scored day. Computing the
+    lag from that would read 0 and have the page announce that nobody traded
+    — asserting a market fact from data that never arrived. The wording works
+    off the real publication date instead.
+    """
+    day = build.gather(seeded)["obs_date"]
+    cutoff = (pd.Timestamp(day) - pd.Timedelta(days=30)).date().isoformat()
+    seeded.execute("DELETE FROM trade_summary WHERE obs_date > ?", (cutoff,))
+    seeded.execute("DELETE FROM curve_residuals WHERE obs_date > ? AND source='trade'",
+                   (cutoff,))
+    seeded.commit()
+
+    data = build.gather(seeded)
+    assert data["trades_through"] == day          # the capped value, as designed
+    assert build._trade_feed_lag(data) > 7        # but the truth is a dead feed
+    assert f"no trade on {day}" not in build.render(data)

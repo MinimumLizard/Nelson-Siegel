@@ -18,9 +18,12 @@ richness and cheapness.
 quote mids on average — real business clears cheaper than dealers show —
 so mixing the two would move the curve by ~10bp depending on which bonds
 happened to trade. Instead trades are held OUT of the fit and compared
-against it afterwards: `trade_bias_bp` measures that quote-to-trade gap
-each day, and `trade_rmse_bp` is an honest out-of-sample error. Both are
-stored per day so the curve can be checked rather than trusted.
+against it afterwards: `trade_bias_bp` is the MEDIAN of that day's
+quote-to-trade gaps, and `trade_rmse_bp` is an honest out-of-sample
+error. Both are stored per day so the curve can be checked rather than
+trusted. The bias is a median because a day holds only 7 to 14 trades and
+one off-market booking in that many moves a mean a long way — see the
+note at the computation.
 
 **Weighting.** Each quote is weighted by 1/spread^2: the bid-offer spread
 is the dealers' own statement of how sure they are. The median spread is
@@ -236,7 +239,22 @@ def fit_day(conn, obs_date: str, lam: float | None = None):
         errors_bp = (trade_obs - trade_fit) * 100.0
         summary["n_trades"] = len(trades)
         summary["trade_rmse_bp"] = float(np.sqrt(np.mean(errors_bp**2)))
-        summary["trade_bias_bp"] = float(np.mean(errors_bp))
+        # MEDIAN, not mean. A day holds 7 to 14 trades, and one booking at
+        # an agreed rather than a market level moves a mean of that many
+        # badly: on 2026-09-24 a single Rs 1bn ticket in the 10.70%2035A
+        # printed at 11.20% against a quote mid of 11.88% and prints of
+        # 11.99 and 12.10 on the two preceding days — it was not a level
+        # anyone dealt at, and the bond traded 12.15 four days later. It
+        # pulled the day's mean to +8.4bp while the median held at +18.7.
+        # `signals.execution.gap` already takes a median for the same
+        # reason; this makes the two agree.
+        #
+        # What a median does NOT fix is the sample size. Seven trades is
+        # seven trades, and over the eight sessions from 2026-09-21 this
+        # number ran +16.0, +12.2, +1.6, +18.7, +18.8, +25.3, +27.4, +9.5
+        # with no outlier involved. The 20-day gap on the page is what to
+        # read for a level; this one says what happened today.
+        summary["trade_bias_bp"] = float(np.median(errors_bp))
         rows += [("trade", t, obs, fit_value, None)
                  for t, obs, fit_value in zip(trades, trade_obs, trade_fit)]
 
