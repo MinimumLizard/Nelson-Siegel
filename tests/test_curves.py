@@ -289,3 +289,48 @@ def test_calibration_prefers_a_steadier_lambda_over_a_marginally_better_fit(tmp_
     assert totals[chosen] <= floor * (1 + curve_fit.STABILITY_TOLERANCE)
     smaller = [lam for lam in totals if lam < chosen]
     assert all(totals[lam] > floor * (1 + curve_fit.STABILITY_TOLERANCE) for lam in smaller)
+
+
+def test_trade_bias_is_a_median_and_survives_one_off_market_print(tmp_path):
+    """One booking at an agreed level must not set the day's headline gap.
+
+    `trade_bias_bp` is the out-of-sample check a reader trusts for "where is
+    the market against the curve". A day holds 7 to 14 trades, so a mean of
+    that many is at the mercy of a single print — and those happen. On
+    2026-09-24 the 10.70%2035A printed Rs 1bn at 11.20% against a quote mid
+    of 11.88%, having traded 11.99 and 12.10 on the two preceding days and
+    12.15 four days later: not a level anyone dealt at. It dragged that day's
+    mean to +8.4bp while the median held at +18.7.
+
+    Nine honest trades at +20bp and one bad one 75bp the other way, which is
+    that day in miniature.
+    """
+    conn = db.connect(tmp_path / "bias.sqlite")
+    obs_date, betas, lam = "2026-08-28", [12.0, -3.0, 1.0], 2.822
+    day = dt.date.fromisoformat(obs_date)
+    taus = [0.5, 1, 2, 3, 4, 6, 8, 10, 12, 14]
+
+    for index, tau in enumerate(taus):
+        isin = f"LKB009{40 + index}F15X"
+        maturity = day + dt.timedelta(days=round(tau * 365.25))
+        yield_pct = float(ns.predict([tau], betas, lam)[0])
+        db.upsert_bond(conn, isin, 10.0, maturity.isoformat(), 9, obs_date,
+                       series_label=f"10.00%{maturity.year}A")
+        db.upsert_quote(conn, obs_date, isin,
+                        bid_yield=yield_pct + 0.08, offer_yield=yield_pct - 0.08,
+                        bid_price=100.0, offer_price=100.0, raw_ref="test")
+        # Every bond trades. Nine of them 20bp cheap to the curve, one at a
+        # level 75bp through it on size, the way an off-market booking prints.
+        offset = -0.75 if index == 5 else 0.20
+        db.upsert_trade_summary(conn, obs_date, isin, "TBond", None, None, None,
+                                None, yield_pct + offset, 1_000_000_000, 1, "test")
+    conn.commit()
+
+    summary = curve_fit.fit_day(conn, obs_date, lam)
+    assert summary["n_trades"] == 10
+    # The median ignores the rogue print; a mean would read about +10.5bp,
+    # halving the number and pointing a reader at a gap that was not there.
+    assert summary["trade_bias_bp"] == pytest.approx(20.0, abs=1.5)
+    # The outlier is not hidden, only kept out of the headline: RMSE still
+    # carries it, which is what an error measure is for.
+    assert summary["trade_rmse_bp"] > 25.0

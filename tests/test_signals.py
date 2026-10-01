@@ -402,3 +402,41 @@ def test_reversion_returns_nothing_rather_than_guessing_across_a_long_gap(tmp_pa
         "obs_date": [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-06-01")],
         "spread_bp": [10.0, 40.0], "zscore": [3.0, 3.0]})
     assert all(v != v for v in signal_run._forward_change(frame))   # all NaN
+
+
+def test_a_benchmark_survives_its_last_day_in_the_window(tmp_path):
+    """BENCHMARK_DAYS is inclusive: day 120 is still on the run, 121 is not.
+
+    This was off by one. The query used a strict `>` on the lower bound, so a
+    bond auctioned exactly BENCHMARK_DAYS ago fell out while the constant's
+    own comment and this module's docstring both promised "<=120d". It is not
+    academic: on 2026-09-24 the 11.20%2033 hit day 120 after its 2026-05-27
+    auction and left the core book, then went on trading 25 of the next 60
+    days — three sessions running at the start of October — so a live
+    benchmark sat under "active" for a day longer than the rule allowed.
+    """
+    import datetime as dt
+
+    from signals import liquidity
+    conn = db.connect(tmp_path / "liq.sqlite")
+    scored = dt.date(2026, 9, 1)
+    _seed_liquidity(conn, "LKB00531B017", days=12, end=scored.isoformat())
+    conn.commit()
+
+    def tier_when_auctioned(days_before):
+        when = (scored - dt.timedelta(days=days_before)).isoformat()
+        conn.execute("DELETE FROM auctions")
+        db.upsert_auction(conn, when, "LKB00531B017", "auction", when,
+                          None, 1_000_000_000, None, None, "t")
+        conn.commit()
+        facts = liquidity.profile(conn, scored.isoformat())["LKB00531B017"]
+        return facts["tier"], facts["days_since_auction"]
+
+    assert tier_when_auctioned(liquidity.BENCHMARK_DAYS - 1) == (
+        "core", liquidity.BENCHMARK_DAYS - 1)
+    # The boundary itself: inclusive, as documented.
+    assert tier_when_auctioned(liquidity.BENCHMARK_DAYS) == (
+        "core", liquidity.BENCHMARK_DAYS)
+    # And one day past it the bond is no longer a benchmark. It still trades,
+    # so it lands in "active" rather than falling out of the signals.
+    assert tier_when_auctioned(liquidity.BENCHMARK_DAYS + 1) == ("active", None)

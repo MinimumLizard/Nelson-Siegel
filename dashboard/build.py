@@ -84,6 +84,18 @@ def gather(conn) -> dict | None:
     funding = carry.funding_rate(conn, obs_date)
     reversion = reversion_table(conn)
     trades_through = liquidity.last_complete_trade_day(conn, obs_date) or obs_date
+    # The UNCAPPED newest published trade day, used only to word the chart.
+    # `last_complete_trade_day` deliberately gives up past a 7-day lag so a
+    # dead feed cannot keep a bond looking liquid, and the `or obs_date`
+    # above then makes the lag read as zero — which would have the page
+    # claim a bond "did not trade" on the strength of a file that never
+    # arrived. That is the same mistake in the opposite direction, so the
+    # wording works off the real publication date, with None meaning no
+    # trade data exists at or before this day at all.
+    published_through = conn.execute(
+        """SELECT MAX(obs_date) AS d FROM trade_summary
+            WHERE security_type = 'TBond' AND obs_date <= ?""",
+        (obs_date,)).fetchone()["d"]
     carried_trades = _carried_trades(residuals, facts)
     quotes = {r["isin"]: r["mid_yield"] for r in conn.execute(
         """SELECT isin, mid_yield FROM observations WHERE obs_date=?
@@ -107,6 +119,7 @@ def gather(conn) -> dict | None:
         "carry": money, "funding": funding, "gap": gap,
         "reversion": reversion, "quotes": quotes,
         "trades_through": trades_through, "carried_trades": carried_trades,
+        "published_through": published_through,
         "coverage": dict(coverage),
         "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
@@ -119,6 +132,38 @@ def gather(conn) -> dict | None:
 # on a file, it has not been trading, and its last level is no longer where
 # anyone would deal.
 CARRY_FORWARD_MAX_DAYS = 10
+
+
+def _trade_feed_lag(data) -> int | None:
+    """Days between the day being shown and the newest published trade file.
+
+    0 means the file for this very day has landed, so a bond with no print
+    in it simply did not trade. Above 0 means the file has not appeared yet
+    and nothing can be said about what traded. None means there is no trade
+    data at all at or before this day.
+    """
+    published = data.get("published_through")
+    if not published:
+        return None
+    return (dt.date.fromisoformat(data["obs_date"])
+            - dt.date.fromisoformat(published)).days
+
+
+def _no_print_reason(data) -> str:
+    """Why a bond has no executed level today — quiet, or not yet published.
+
+    These are different facts and the page used to assert the second one
+    unconditionally. The distinction is the whole point of carrying marks
+    forward: "nobody dealt in this bond" is a market observation, while
+    "the file has not arrived" is a statement about the PDMO's publishing
+    schedule, and reading one as the other is how a quiet session looks
+    like a broken feed. Since 2026-09-21 the trade file has mostly landed
+    the same evening, so the wrong branch was the one being shown.
+    """
+    lag = _trade_feed_lag(data)
+    if lag == 0:
+        return f'no trade on {data["obs_date"]}'
+    return f'not yet published for {data["obs_date"]}'
 
 
 def _carried_trades(residuals, facts) -> list[dict]:
@@ -292,8 +337,7 @@ def curve_svg(data) -> str:
             row["tau_years"], row["observed_yield"], "trade carried",
             f'{labels.get(row["isin"]) or row["isin"]} last traded '
             f'{row["obs_date"]} ({row["days_ago"]}d ago) · '
-            f'{row["observed_yield"]:.2f}% · not yet published for '
-            f'{data["obs_date"]}'))
+            f'{row["observed_yield"]:.2f}% · {_no_print_reason(data)}'))
 
     parts.append(f'<text class="axis-label" x="{(left + right) / 2:.0f}" '
                  f'y="{CHART_HEIGHT - 6}" text-anchor="middle">years to maturity</text>')
@@ -610,21 +654,28 @@ def render(data, fragment: bool = False) -> str:
         f'{liquidity.BENCHMARK_MIN_DAYS} days in the last {liquidity.WINDOW_DAYS} '
         f'today.</p>')
     # Deliberately no promised date. The publication lag is not a fixed rule:
-    # through 2026-09-10 a day's trades appeared the same evening, and from
-    # 2026-09-11 they began arriving the next day instead. That shift is what
-    # silently killed the out-of-sample check, so the page states what is true
-    # (these are pending, and the next run will collect them) rather than a
-    # calendar date the PDMO has already moved once.
+    # through 2026-09-10 a day's trades appeared the same evening, from
+    # 2026-09-11 they began arriving the next day or the third, and from
+    # 2026-09-21 they have mostly been same-evening again. That first shift
+    # is what silently killed the out-of-sample check, so the page states
+    # which of the two situations it is actually in rather than a calendar
+    # date the PDMO has already moved twice.
     carried = len(data.get("carried_trades", []))
     carried_key = (f'<span><i style="border:2px solid var(--series-2);'
                    f'background:none"></i>last known trade, carried forward '
-                   f'({carried} bond(s), not yet published for '
-                   f'{data["obs_date"]})</span>' if carried else "")
-    trade_key = ('<span><i style="background:var(--series-2)"></i>executed trades, '
-                 'held out of the fit</span>' if has_trades else
-                 f'<span class="muted-key">executed trades for {data["obs_date"]} '
-                 f'are not published yet — they arrive a day or so later and the '
-                 f'next run picks them up</span>')
+                   f'({carried} bond(s), {_no_print_reason(data)})</span>'
+                   if carried else "")
+    if has_trades:
+        trade_key = ('<span><i style="background:var(--series-2)"></i>executed '
+                     'trades, held out of the fit</span>')
+    elif _trade_feed_lag(data) == 0:
+        trade_key = (f'<span class="muted-key">the trade file for '
+                     f'{data["obs_date"]} has published and none of the bonds '
+                     f'on this curve changed hands</span>')
+    else:
+        trade_key = (f'<span class="muted-key">executed trades for '
+                     f'{data["obs_date"]} are not published yet — they arrive a '
+                     f'day or so later and the next run picks them up</span>')
     body = f"""<div id="tip"></div>
 <div class="wrap">
   <h1>LKR government bond relative value</h1>

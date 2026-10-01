@@ -43,7 +43,7 @@ import datetime as dt
 WINDOW_DAYS = 60           # trailing window for turnover and days traded
 MIN_DAYS_TRADED = 10       # under this in the window, treat as untradeable
 BENCHMARK_MIN_DAYS = 8     # a current benchmark clears a lower bar, not none
-BENCHMARK_DAYS = 120       # how recently a bond must have been auctioned
+BENCHMARK_DAYS = 120       # auctioned within this many days, inclusive
 POST_AUCTION_DAYS = 14     # the window in which auctioned paper sits cheap
 # How far the trade feed may lag before its silence stops being a publication
 # delay and starts being missing data. Inside this, the window is anchored to
@@ -121,9 +121,22 @@ def profile(conn, obs_date: str) -> dict:
                                 days_traded=row["days_traded"] or 0)
 
     # Benchmark status and where each bond sits in its auction cycle.
+    #
+    # `>=` on the lower bound, so a bond auctioned EXACTLY BENCHMARK_DAYS
+    # ago is still on the run. With the strict `>` this replaces, the
+    # effective window was 119 days while the constant said 120 — the kind
+    # of mismatch nobody notices until it moves a name. On 2026-09-24 the
+    # 11.20%2033 reached day 120 after its 2026-05-27 auction and left the
+    # core book, though it was still trading (25 of the prior 60 days, and
+    # again on the 28th and the 30th).
+    #
+    # Worth being clear about the size of this: it buys one day per
+    # benchmark, at the end of the window. It does not rescue a bond that
+    # is genuinely past the cutoff — the 11.20%2033 was 126 days out by
+    # month-end and correctly reads "active" there.
     for row in conn.execute(
             """SELECT isin, MAX(auction_date) AS last_auction FROM auctions
-                WHERE auction_date > ? AND auction_date <= ?
+                WHERE auction_date >= ? AND auction_date <= ?
                 GROUP BY isin""", (benchmark_start, obs_date)):
         entry = out.setdefault(row["isin"], dict(EMPTY))
         since = (today - dt.date.fromisoformat(row["last_auction"])).days
