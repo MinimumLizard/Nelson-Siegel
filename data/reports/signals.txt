@@ -1,45 +1,50 @@
 
-LKR government bond relative value — 2026-10-12
-curve: 53 bonds, fit RMSE 5.5bp, lambda 2.82y; vs 4 trades bias +18.0bp
-vs executed trades: +18.0bp bias over 4 trades on 2026-10-12
-execution: trades printing 14bp cheaper than the quote mid over the last 20 days (n=114)
+LKR government bond relative value — 2026-10-13
+curve: 53 bonds, fit RMSE 5.5bp, lambda 2.82y
+vs executed trades: +18.0bp bias over 4 trades on 2026-10-12 (1d ago)
+execution: trades printing 16bp cheaper than the quote mid over the last 20 days (n=101)
 funding: 9.97% = 9.92% 12m bill + 5bp (bill as of 2026-10-09)
 
-=== CORE BOOK — 6 auction benchmark(s), actually trading ===
+=== CORE BOOK — 8 auction benchmark(s), actually trading ===
 
 cheapest at the top, richest at the bottom
   series               quote   traded   resid     gap      z   b/o  carry  roll  per dur   Rs bn  days   auction  cover
-  11.70%2034A          11.93    12.19    +5.3    +5.8    0.9    12    211   +53       55    65.1    34       31d   2.3x
-  11.60%2031A          11.33 11.45/3d    +7.9    +3.0    0.6    12    151   +85       73    35.4    32       74d   2.9x
-  10.85%2036A          12.0912.16/26d    +5.0    +2.2    0.3    23    227   +44       48    19.1    16       74d   2.1x
-  11.00%2030B          11.20    11.38    +2.8    -0.8   -0.2    17    138   +84       74    42.3    35       91d   2.9x
-  10.00%2030A          11.15 11.25/5d    +3.5    -1.5   -0.3    18    133   +89       74    58.3    33       31d   1.5x
-  10.75%2037A          12.1312.20/26d    +2.9    -4.1   -0.6    24    231   +38       46    13.5    12       31d   2.9x
+  11.70%2034A          11.98 12.19/1d    +6.9    +7.3    1.1    12    217   +55       57    65.1    34       32d   2.3x
+  11.60%2031A          11.35 11.45/4d    +8.0    +3.0    0.6    12    154   +86       74    35.4    32       75d   2.9x
+  12.00%2031A          11.45 11.60/1d    -0.7    +1.9    0.4    14    165   +78       67     5.5    13       0d*      -
+  10.85%2036A          12.1212.16/27d    +4.4    +1.5    0.2    24    231   +45       49    19.1    16       0d*   2.1x
+  11.00%2030B          11.20 11.38/1d    +1.5    -2.0   -0.4    17    140   +86       75    42.3    35       92d   2.9x
+  10.00%2030A          11.16 11.25/6d    +2.8    -2.1   -0.4    18    135   +91       75    58.3    33       32d   1.5x
+  11.00%2029A          10.7310.85/22d   -10.9    -2.1   -0.5    23     93   +91       76     5.8     9       0d*      -
+  10.75%2037A          12.1612.20/27d    +2.1    -4.7   -0.7    26    235   +40       47    13.5    12       32d   2.9x
 
-=== ALSO TRADING — 13 liquid, but not on the run ===
+  * still inside the post-auction window: over the 16 auctions in this data
+    bonds sat about 5bp cheap to their own norm for a fortnight afterwards.
+
+=== ALSO TRADING — 12 liquid, but not on the run ===
 
 cheap to their own norm
   series               quote   traded   resid     gap      z   b/o   Rs bn  days
-  10.75%2034A          11.88 12.08/4d    +4.4    +6.1    1.1    13     8.7    11
-  11.50%2032A          11.63 11.72/6d    -0.2    +5.4    1.0    20    18.2    25
-  11.20%2033           11.73 11.80/6d    +8.0    +5.0    0.9    18     9.6    21
-  9.00%2033B           11.77 11.95/3d    +0.4    +5.1    0.9    26    31.4    29
+  10.75%2034A          11.90 12.08/5d    +3.7    +5.3    0.9    15     8.7    11
+  11.50%2032A          11.65 11.72/7d    -0.8    +4.7    0.8    21    18.2    25
+  9.00%2033B           11.79 11.95/4d    +0.2    +4.6    0.8    26    31.4    29
+  11.20%2033           11.74 11.80/7d    +7.1    +3.9    0.7    18     9.6    21
 
 rich to their own norm
   series               quote   traded   resid     gap      z   b/o   Rs bn  days
-  11.00%2030A          11.0011.28/13d    -5.6    -6.0   -1.0    19     3.8    12
-  9.50%2030A           10.9711.00/26d    -2.6    -4.3   -0.9    17    22.2    14
-  10.35%2029A          10.7910.85/11d    -7.6    -1.3   -0.3    21     8.4    10
-  12.00%2031A          11.40    11.60    -4.0    -1.4   -0.3    16     5.5    13
+  11.00%2030A          11.0111.28/14d    -5.3    -5.4   -0.9    20     3.8    12
+  9.50%2030A           10.9811.00/27d    -2.4    -3.9   -0.8    18    22.2    14
+  10.35%2029A          10.7910.85/12d    -8.3    -2.0   -0.5    21     8.4    10
+  11.50%2028B          10.53 10.63/1d    -0.9    -0.5   -0.1    19     9.7    17
 
 SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
   buy                 sell                     gap      z   cost    exp  verdict
-  11.70%2034A         10.75%2037A              9.9    2.3     18    7.0  below costs
-  11.60%2031A         10.00%2030A              2.6   -1.2     15    0.0  weak signal
-  10.85%2036A         10.75%2037A              6.2    0.8     23    0.0  weak signal
-  11.60%2031A         10.75%2037A              7.0    0.8     18    0.0  weak signal
-  11.70%2034A         10.00%2030A              7.3   -0.7     15    0.0  weak signal
-  11.60%2031A         11.00%2030B              1.8    0.7     15    0.0  weak signal
+  11.70%2034A         10.75%2037A             12.0    2.7     19    7.0  below costs
+  11.60%2031A         10.00%2030A              3.3   -1.5     15    0.0  weak signal
+  11.60%2031A         11.00%2030B              3.1    1.2     15    0.0  weak signal
+  12.00%2031A         10.00%2030A              4.0   -1.0     16    0.0  weak signal
+  12.00%2031A         11.00%2030B              3.9   -1.0     15    0.0  weak signal
+  11.70%2034A         11.00%2029A              9.4   -1.0     17    0.0  weak signal
 
 quote = the day's indicative mid, which is a midpoint of the PDMO's AVERAGE
 buying and selling prices across dealers — not a level anyone must deal on
@@ -53,9 +58,9 @@ carry = entry yield less funding, bp p.a. | roll = price gain from ageing down
 the curve | per dur = the two together per year of duration, which is the only
 one of them that is not mostly a bet on duration
 Rs bn / days = turnover and days traded over the 60 days to 2026-10-12 — the last day
-whose trade file has published. The quote columns run to 2026-10-12; the two feeds
+whose trade file has published. The quote columns run to 2026-10-13; the two feeds
 publish on different clocks.
 auction = days since it was last sold | * = inside the 14-day post-auction window
-34 scored bond(s) not shown: quoted wider than 50bp, or traded on fewer than 10 of the last 60 days.
+33 scored bond(s) not shown: quoted wider than 50bp, or traded on fewer than 10 of the last 60 days.
 They stay IN the curve — it needs the whole cross-section to have a
 shape — but a dislocation you cannot deal on is not an opportunity.
