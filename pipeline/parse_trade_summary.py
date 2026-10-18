@@ -38,18 +38,45 @@ def _clean_number(cell) -> float | None:
     return float(text)
 
 
+# How far apart the printed title and the index label may be before the
+# title is treated as the typo. Each file is posted within a few days of its
+# trade date, so a genuine disagreement is small and a large one is a title
+# nobody updated.
+MAX_TITLE_LABEL_GAP_DAYS = 7
+
+
 def _resolve_title_date(text: str, label_date: date | None) -> date:
-    """Pick the report date from the page title, defensively."""
+    """Pick the report date from the page title, defensively.
+
+    The title and the index label have each been wrong once, so neither wins
+    outright:
+
+    * 2026-01-29's file was posted twice, once under the label 2026-01-26.
+      The title was right; the label was the slip, 3 days out.
+    * 2026-10-15's file is titled "15.09.2026", with "14.09.2026" as its
+      prior-day column: last month's template with the month not updated.
+      Here the label was right. Trusting the title filed 15 October's trades
+      under 15 September, on top of that day's real trades.
+
+    A trade file is posted within days of its trade date, so a title a few
+    days from its label may be a mislabelled upload, but one a month away
+    cannot be.
+    """
     match = re.search(r"Trade Summary\D{0,5}(\d{1,2}\.\d{1,2}\.\d{4})", text)
     if match:
         day_first, month_first = dates.parse_ambiguous_numeric(match.group(1))
         for candidate in (day_first, month_first):
             if candidate and candidate == label_date:
                 return candidate
-        if day_first:  # every sample so far is day-first
-            return day_first
-        if month_first:
-            return month_first
+        title = day_first or month_first  # every sample so far is day-first
+        if title and label_date and \
+                abs((title - label_date).days) > MAX_TITLE_LABEL_GAP_DAYS:
+            log.warning("title date %s is %d days from index label %s — "
+                        "trusting the label", title,
+                        abs((title - label_date).days), label_date)
+            return label_date
+        if title:
+            return title
     spelled = dates.parse_spelled(text)
     if spelled:
         return spelled
