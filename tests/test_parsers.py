@@ -127,6 +127,23 @@ def test_trades_types(trades):
     assert kinds == {"Tbill", "TBond"}
 
 
+def test_a_title_a_month_from_its_label_is_the_typo():
+    # 2026-10-15's file, as printed: last month's template, month unchanged.
+    # Taking the title filed it on 2026-09-15, over that day's real trades.
+    text = ("Government Securities Secondary Market Trade Summary*15.09.2026\n"
+            "Indicators 15.09.2026 14.09.2026")
+    resolved = parse_trade_summary._resolve_title_date(text, date(2026, 10, 15))
+    assert resolved == date(2026, 10, 15)
+
+
+def test_a_title_a_few_days_from_its_label_still_wins():
+    # 2026-01-29's file was also uploaded under the label 2026-01-26 (same
+    # bytes). There the label was the slip and the title was right.
+    text = "Government Securities Secondary Market Trade Summary*29.01.2026"
+    resolved = parse_trade_summary._resolve_title_date(text, date(2026, 1, 26))
+    assert resolved == date(2026, 1, 29)
+
+
 # ---------------------------------------------------------------------------
 # Auction press releases (PDF) — two published shapes, one parser
 # ---------------------------------------------------------------------------
