@@ -23,7 +23,7 @@ from curves import fit as curve_fit
 from curves import nelson_siegel as ns
 from dashboard import palette
 from pipeline import config, db
-from signals import carry, execution, liquidity
+from signals import carry, curve_shape, execution, liquidity, zscore
 from signals.report import (MAX_TRADEABLE_SPREAD_BP, _expected_capture,
                             reversion_table)
 
@@ -123,6 +123,8 @@ def gather(conn) -> dict | None:
         "coverage": dict(coverage),
         "last_checked": last_checked,
         "hidden": len(spreads) - len(tradeable),
+        "curve_shape": curve_shape.on(conn, obs_date),
+        "curve_history": curve_shape.history(conn),
     }
 
 
@@ -347,6 +349,105 @@ def curve_svg(data) -> str:
     return "".join(parts)
 
 
+SHAPE_HEIGHT = 300
+SHAPE_MARGIN = {"left": 58, "right": 62, "top": 14, "bottom": 34}
+
+
+def shape_svg(data) -> str:
+    """Each curve spread over time, on one bp axis: four lines, end-labelled.
+
+    Hovering anywhere on the plot reads out all four spreads for that date —
+    the pointer finds a date, never a 2px line.
+    """
+    history = data.get("curve_history") or {}
+    pairs = [curve_shape.pair_name(*pair) for pair in curve_shape.PAIRS
+             if curve_shape.pair_name(*pair) in history]
+    if not pairs:
+        return "<p class='empty'>No curve spreads stored yet.</p>"
+    dates = sorted({when for pair in pairs for when, _ in history[pair]})
+    values = {pair: dict(history[pair]) for pair in pairs}
+    every = [value for pair in pairs for value in values[pair].values()]
+    low, high = min(every), max(every)
+    pad = (high - low) * 0.06 or 5.0
+    y0, y1 = low - pad, high + pad
+    left, right = SHAPE_MARGIN["left"], CHART_WIDTH - SHAPE_MARGIN["right"]
+    top, bottom = SHAPE_MARGIN["top"], SHAPE_HEIGHT - SHAPE_MARGIN["bottom"]
+    step = (right - left) / max(len(dates) - 1, 1)
+
+    def sx(index):
+        return left + index * step
+
+    def sy(value):
+        return bottom - (value - y0) / (y1 - y0) * (bottom - top)
+
+    parts = [f'<svg viewBox="0 0 {CHART_WIDTH} {SHAPE_HEIGHT}" role="img" '
+             f'aria-label="Curve spreads from {dates[0]} to {dates[-1]}" class="curve">']
+    for value in _nice_ticks(y0, y1):
+        y = sy(value)
+        parts.append(f'<line class="grid" x1="{left}" y1="{y:.1f}" x2="{right}" y2="{y:.1f}"/>')
+        parts.append(f'<text class="tick" x="{left - 10}" y="{y + 4:.1f}" '
+                     f'text-anchor="end">{value:.0f}</text>')
+    # One tick per month, at its first fitted day.
+    seen = set()
+    for index, when in enumerate(dates):
+        month = when[:7]
+        if month in seen:
+            continue
+        seen.add(month)
+        label = dt.date.fromisoformat(when).strftime("%b")
+        parts.append(f'<text class="tick" x="{sx(index):.1f}" y="{bottom + 20}" '
+                     f'text-anchor="middle">{label}</text>')
+    parts.append(f'<line class="axis" x1="{left}" y1="{bottom}" x2="{right}" y2="{bottom}"/>')
+
+    for slot, pair in enumerate(pairs, start=1):
+        points = " ".join(f"{sx(index):.1f},{sy(values[pair][when]):.1f}"
+                          for index, when in enumerate(dates) if when in values[pair])
+        parts.append(f'<polyline class="shapeline" style="stroke:var(--series-{slot})" '
+                     f'points="{points}"/>')
+
+    # End labels in ink, nudged apart so two close spreads never overprint.
+    ends = sorted(((sy(values[pair][dates[-1]]), pair) for pair in pairs
+                   if dates[-1] in values[pair]), reverse=True)
+    placed = []
+    for y, pair in ends:
+        if placed and placed[-1] - y < 13:
+            y = placed[-1] - 13
+        placed.append(y)
+        parts.append(f'<text class="endlabel" x="{right + 6}" y="{y + 4:.1f}">'
+                     f'{pair} {values[pair][dates[-1]]:.0f}</text>')
+
+    # Hover bands: one per date, the full height of the plot.
+    for index, when in enumerate(dates):
+        readout = " · ".join(f"{pair} {values[pair][when]:.0f}"
+                             for pair in pairs if when in values[pair])
+        tip = html.escape(f"{when} · {readout} bp")
+        parts.append(f'<rect class="xhair" x="{sx(index) - step / 2:.1f}" y="{top}" '
+                     f'width="{max(step, 1):.2f}" height="{bottom - top}" '
+                     f'data-tip="{tip}"/>')
+    parts.append(f'<text class="axis-label" transform="translate(14,{(top + bottom) / 2:.0f}) '
+                 f'rotate(-90)" text-anchor="middle">long less 2-year, bp</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _shape_rows(rows) -> str:
+    out = []
+    for row in rows:
+        def show(value, fmt):
+            return "–" if value is None else format(value, fmt)
+        shown = show(row["reversion_bp"], ".1f")
+        clears, verdict = curve_shape.verdict(row)
+        colour = "var(--good)" if clears else "var(--warning)"
+        out.append(
+            f'<tr><td>{row["pair"]}</td><td>{row["spread_bp"]:.0f}</td>'
+            f'<td>{show(row["mean_bp"], ".0f")}</td><td>{show(row["zscore"], "+.1f")}</td>'
+            f'<td>{show(row["change_20d_bp"], "+.0f")}</td>'
+            f'<td>{row["low_bp"]:.0f} – {row["high_bp"]:.0f}</td>'
+            f'<td>{show(row["cost_bp"], ".0f")}</td><td>{shown}</td>'
+            f'<td><span class="badge"><i style="background:{colour}"></i>{verdict}</span></td></tr>')
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
@@ -377,6 +478,10 @@ h2 { font-size: 15px; margin: 32px 0 10px; }
 .quote.core { fill: var(--ink-2); fill-opacity: .95; }
 .trade { fill: var(--series-2); stroke: var(--surface); stroke-width: 2; }
 .trade.carried { fill: none; stroke: var(--series-2); stroke-width: 2; }
+.shapeline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.endlabel { fill: var(--ink-2); font-size: 11px; }
+.xhair { fill: var(--ink); fill-opacity: 0; }
+.xhair:hover { fill-opacity: .12; }
 .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--ink-2);
           font-size: 12px; margin-top: 10px; }
 .legend i { display: inline-block; width: 11px; height: 11px; margin-right: 6px;
@@ -676,6 +781,14 @@ def render(data, fragment: bool = False) -> str:
         trade_key = (f'<span class="muted-key">executed trades for '
                      f'{data["obs_date"]} are not published yet — they arrive a '
                      f'day or so later and the next run picks them up</span>')
+    shape_rows = data.get("curve_shape", [])
+    first_pair = curve_shape.pair_name(*curve_shape.PAIRS[0])
+    shape_first = (data.get("curve_history") or {}).get(first_pair, [("–",)])[0][0]
+    shape_legend = "".join(
+        f'<span><i class="line-key" style="background:var(--series-{slot})"></i>'
+        f'{row["pair"]}</span>' for slot, row in enumerate(shape_rows, start=1))
+    window, signal_z = zscore.WINDOW_DAYS, curve_shape.SIGNAL_Z
+    horizon = curve_shape.REVERSION_HORIZON_DAYS
     body = f"""<div id="tip"></div>
 <div class="wrap">
   <h1>LKR government bond relative value</h1>
@@ -749,6 +862,30 @@ def render(data, fragment: bool = False) -> str:
      historically recovered within ten days. Most candidates do not clear their
      own costs as a standalone round trip — the honest use is choosing between
      trades you were doing anyway.</p>
+
+  <h2>Curve shape — how steep, against its own history</h2>
+  <p class="tier">The yield at each maturity less the yield at 2 years — the
+     same idea as "2s10s", the usual one-number summary of how much more the
+     market asks to lend for longer. Rising lines mean the curve is steepening.
+     Each point is the fitted curve plus what the bonds near that maturity are
+     actually quoting, so a kink the curve cannot bend to follow still shows.</p>
+  <div class="card">
+    {shape_svg(data)}
+    <div class="legend">{shape_legend}</div>
+  </div>
+  <div class="card" style="margin-top:10px;overflow-x:auto"><table><thead><tr>
+    <th>pair</th><th>today bp</th><th title="its own {window}-day average, excluding today">norm</th>
+    <th>z</th><th>20d change</th><th>range since {shape_first}</th>
+    <th title="half the bid-offer near each point, summed">cost bp</th>
+    <th title="how far a spread {signal_z:g} sd from its norm has come back over the next {horizon} trading days, on this history">expected bp</th>
+    <th>verdict</th></tr></thead>
+    <tbody>{_shape_rows(data.get("curve_shape", []))}</tbody></table></div>
+  <p class="foot"><b>Context, not a signal.</b> Tested as a trade — enter the
+     day after a spread sits {signal_z:g} sd from its own norm — only 2s5s came
+     back clearly more than chance would give, and by less than crossing the
+     bid-offer on both legs costs. Read it as where the curve's steepness
+     sits against its own recent range, for decisions made on other grounds.
+     <code>python -m signals.validate</code> reprints the test as history grows.</p>
 
   <p class="foot">A bond's raw distance from the curve is not a signal: some
      bonds sit permanently cheap. Each is scored against <b>its own</b> trailing

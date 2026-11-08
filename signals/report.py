@@ -26,7 +26,7 @@ import argparse
 
 from curves import fit as curve_fit
 from pipeline import db
-from signals import carry, execution, liquidity
+from signals import carry, curve_shape, execution, liquidity, zscore
 
 # How far a pair spread has actually come back over the following 10 days,
 # per z threshold. NOT a constant: `signals.run` measures it from the stored
@@ -254,6 +254,8 @@ def show(conn, obs_date: str, top: int) -> None:
             print(f"  {buy:<20}{sell:<20}{abs(row['dislocation_bp']):>8.1f}"
                   f"{row['zscore']:>7.1f}{cost:>7.0f}{shown:>7}  {verdict}")
 
+    _curve_shape(conn, obs_date)
+
     print("\nquote = the day's indicative mid, which is a midpoint of the PDMO's "
           "AVERAGE\nbuying and selling prices across dealers — not a level anyone "
           "must deal on\ntraded = where it last actually changed hands, and how "
@@ -277,6 +279,38 @@ def show(conn, obs_date: str, top: int) -> None:
               f"{liquidity.MIN_DAYS_TRADED} of the last {liquidity.WINDOW_DAYS} days.\n"
               "They stay IN the curve — it needs the whole cross-section to have a\n"
               "shape — but a dislocation you cannot deal on is not an opportunity.")
+
+
+def _curve_shape(conn, obs_date) -> None:
+    """How steep the curve is against its own history. Context, not a trade:
+    the verdict column says what trading it would have paid, measured."""
+    rows = curve_shape.on(conn, obs_date)
+    if not rows:
+        return
+    first = conn.execute("SELECT MIN(obs_date) AS d FROM curve_spreads").fetchone()["d"]
+    print("\nCURVE SHAPE — yield at the long point less the 2-year, bp "
+          "(+ = upward sloping)")
+    print(f"  {'pair':<7}{'today':>7}{'norm':>7}{'z':>6}{'20d':>6}"
+          f"{'range since ' + first:>26}{'cost':>6}{'exp':>6}  verdict")
+    for row in rows:
+        norm = f"{row['mean_bp']:.0f}" if row["mean_bp"] is not None else "-"
+        z = f"{row['zscore']:+.1f}" if row["zscore"] is not None else "-"
+        moved = (f"{row['change_20d_bp']:+.0f}" if row["change_20d_bp"] is not None
+                 else "-")
+        cost = f"{row['cost_bp']:.0f}" if row["cost_bp"] is not None else "-"
+        shown = (f"{row['reversion_bp']:.1f}" if row["reversion_bp"] is not None
+                 else "-")
+        verdict = curve_shape.verdict(row)[1]
+        print(f"  {row['pair']:<7}{row['spread_bp']:>7.0f}{norm:>7}{z:>6}{moved:>6}"
+              f"{row['low_bp']:>19.0f} .. {row['high_bp']:<3.0f}{cost:>6}{shown:>6}"
+              f"  {verdict}")
+    print(f"  norm = its own {zscore.WINDOW_DAYS}-day average, excluding today | z = "
+          f"today against that,\n  + = steeper than usual | cost = half the "
+          f"bid-offer near each point, summed |\n  exp = how far a spread "
+          f"{curve_shape.SIGNAL_Z:g} sd from its norm has come back over the "
+          f"next\n  {curve_shape.REVERSION_HORIZON_DAYS} trading days, measured "
+          f"on this history. Context for a decision made\n  on other grounds, "
+          f"not a signal: see signals/curve_shape.py")
 
 
 def _building(conn, obs_date, facts) -> None:

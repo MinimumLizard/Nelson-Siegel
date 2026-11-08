@@ -6,6 +6,10 @@ place. Assignments follow the job each colour does:
 * the fitted curve and the two mark types are CATEGORICAL (identity) and take
   the first fixed slots — never cycled, and only three are on screen at once,
   which is the cap for scatter-type forms;
+* the curve-shape chart is a separate figure with its own legend, and its
+  four spreads take slots 1-4 in that same fixed order. Slots 3 and 4 fall
+  under 3:1 contrast on the light surface, so its lines are labelled at
+  their ends and the same numbers sit in a table beside it;
 * cheap/rich is POLARITY, so it uses the diverging blue<->red pair with a
   neutral midpoint, never two arbitrary hues;
 * the switch verdict is STATUS, from the reserved status palette, and always
@@ -25,6 +29,8 @@ CSS = """
   --border:         rgba(11,11,11,0.10);
   --series-1:       #2a78d6;   /* fitted curve */
   --series-2:       #eb6834;   /* executed trades */
+  --series-3:       #1baf7a;   /* curve-shape chart only */
+  --series-4:       #eda100;
   --cheap:          #2a78d6;   /* diverging: yields above the curve */
   --rich:           #e34948;   /* diverging: yields below the curve */
   --neutral:        #f0efec;   /* diverging midpoint */
@@ -44,6 +50,8 @@ CSS = """
     --border:       rgba(255,255,255,0.10);
     --series-1:     #3987e5;
     --series-2:     #d95926;
+    --series-3:     #199e70;
+    --series-4:     #c98500;
     --cheap:        #3987e5;
     --rich:         #e66767;
     --neutral:      #383835;
@@ -61,6 +69,8 @@ CSS = """
   --border:       rgba(255,255,255,0.10);
   --series-1:     #3987e5;
   --series-2:     #d95926;
+  --series-3:     #199e70;
+  --series-4:     #c98500;
   --cheap:        #3987e5;
   --rich:         #e66767;
   --neutral:      #383835;

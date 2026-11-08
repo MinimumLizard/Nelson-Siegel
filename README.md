@@ -195,6 +195,11 @@ rupees**.
   **Sign convention: positive means the bond yields more than the curve
   says it should — i.e. cheap.** This table is what the signals stage will
   consume.
+* **curve_spreads** — the curve's shape: `obs_date`, `pair` ('2s5s',
+  '2s8s', '2s10s', '2s12s'), `spread_bp` (long point less the 2-year),
+  `curve_only_bp` (the same from the fitted curve alone), `mean_bp`,
+  `sd_bp`, `zscore` against its own trailing window, `cost_bp`. Written by
+  `signals.run`; see "Curve shape" below.
 * **files** — download/parse provenance: `url` (PK), `sha256`, `file_type`,
   `report_date`, `posted_date`, `downloaded_at`, `parse_status`,
   `parse_note`.
@@ -424,6 +429,33 @@ The gap does **not** bias a z-score: each bond is measured against its own
 trailing mean, so any offset that is stable for that bond divides out. What
 it does change is the yield you actually buy at, which is where carry
 starts.
+
+## Curve shape: 2s5s, 2s8s, 2s10s, 2s12s
+
+Everything above is one bond against the curve. These are the curve
+itself: the yield at 5, 8, 10 and 12 years less the yield at 2.
+"2s10s" ("twos tens") is the usual one-number summary of how steep a
+curve is — how much more the market asks to lend for ten years than for
+two. Wide is steep, near zero is flat, negative is inverted. The other
+three ask the same question at other points, which shows WHERE along the
+curve a steepening or flattening is happening.
+
+Each point is the fitted curve **plus** the average residual of the bonds
+quoted near that maturity (`signals/curve_shape.py`). The curve alone is
+not enough: with three parameters it cannot bend to follow a kink, and in
+April-May 2026, when the bonds near 2 years sat 16-18bp cheap to it and
+those near 5 years 15-16bp rich, its own 2s5s read about 30bp steeper than
+any pair of actual bonds did. Both are stored, so the difference can be
+checked.
+
+**It is context, not a trade signal.** Tested as one — enter the day after
+a spread sits 1.5 sd from its own 60-day norm — only 2s5s came back
+clearly more than a random walk with the same daily moves would, about
+5-6bp over 5-10 days, against roughly 16-18bp to cross the bid-offer on
+both legs. 2s8s was borderline at five days; 2s10s and 2s12s could not be
+told from chance. `signals.report` and the page print the measured figure
+and the cost beside each spread, and `python -m signals.validate` reruns
+the test against random walks as history grows.
 
 ## Carry
 

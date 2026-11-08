@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline import db
-from signals import zscore
+from signals import curve_shape, zscore
 
 # Horizon and thresholds the report quotes a signal's worth at. Measured on
 # every rebuild rather than pasted in: the previous figures were taken on a
@@ -62,8 +62,10 @@ def rebuild(conn) -> dict:
               row.tau_b, row.spread_bp, row.mean_bp, row.sd_bp, row.dislocation_bp,
               row.zscore, int(row.n_window)) for row in switches.itertuples()])
     measure_reversion(conn, switches)
+    curve_rows = curve_shape.rebuild(conn)
     conn.commit()
-    return {"bond_signals": len(bonds), "switch_signals": len(switches)}
+    return {"bond_signals": len(bonds), "switch_signals": len(switches),
+            "curve_spreads": curve_rows}
 
 
 # A pair may be missing an observation, so the row N places later is not the
@@ -142,7 +144,8 @@ def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     counts = rebuild(db.connect())
     print(f"stored {counts['bond_signals']} bond signals "
-          f"and {counts['switch_signals']} switch signals")
+          f"and {counts['switch_signals']} switch signals; "
+          f"{counts['curve_spreads']} curve-spread rows")
 
 
 if __name__ == "__main__":

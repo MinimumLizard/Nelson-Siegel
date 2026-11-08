@@ -179,6 +179,25 @@ CREATE TABLE IF NOT EXISTS switch_signals (
     PRIMARY KEY (obs_date, isin_a, isin_b)
 );
 
+-- The curve's shape: yield at the long point less yield at the 2-year
+-- point, one row per pair ('2s10s' etc.) per day. Written by
+-- signals/curve_shape.py, which explains how each point is measured.
+-- Unlike the tables above, days too early for a z-score are kept.
+CREATE TABLE IF NOT EXISTS curve_spreads (
+    obs_date       TEXT NOT NULL,
+    pair           TEXT NOT NULL,
+    short_years    REAL,
+    long_years     REAL,
+    spread_bp      REAL,   -- long less short; + = upward sloping
+    curve_only_bp  REAL,   -- the same from the fitted curve alone
+    mean_bp        REAL,   -- trailing window, excluding this day
+    sd_bp          REAL,
+    zscore         REAL,   -- + = steeper than its own recent norm
+    n_window       INTEGER,
+    cost_bp        REAL,   -- half the bid-offer near each point, summed
+    PRIMARY KEY (obs_date, pair)
+);
+
 -- What the stored signals were worth, measured FROM those signals rather
 -- than pasted in from a note. Every empirical constant in this project has
 -- gone stale at least once: the reversion figures the report quotes were
