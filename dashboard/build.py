@@ -461,7 +461,10 @@ h1 { font-size: 21px; margin: 0 0 4px; letter-spacing: -0.01em; }
 h2 { font-size: 15px; margin: 32px 0 10px; }
 .sub { color: var(--ink-2); margin: 0 0 22px; }
 .card { background: var(--surface); border: 1px solid var(--border);
-        border-radius: 10px; padding: 16px; }
+        border-radius: 10px; padding: 16px;
+        /* Wide tables scroll inside their card rather than pushing the whole
+           page sideways on a phone. */
+        overflow-x: auto; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
          gap: 10px; margin-bottom: 22px; }
 .tile .label { color: var(--muted); font-size: 12px; }
@@ -489,6 +492,9 @@ h2 { font-size: 15px; margin: 32px 0 10px; }
 .legend .line-key { width: 16px; height: 3px; border-radius: 2px; vertical-align: 3px; }
 .legend .muted-key { color: var(--muted); font-style: italic; }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+/* A grid column is otherwise at least as wide as its widest table, which
+   pushed the page sideways on a phone; the card scrolls instead. */
+.cols > div { min-width: 0; }
 @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px;
@@ -873,7 +879,7 @@ def render(data, fragment: bool = False) -> str:
     {shape_svg(data)}
     <div class="legend">{shape_legend}</div>
   </div>
-  <div class="card" style="margin-top:10px;overflow-x:auto"><table><thead><tr>
+  <div class="card" style="margin-top:10px"><table><thead><tr>
     <th>pair</th><th>today bp</th><th title="its own {window}-day average, excluding today">norm</th>
     <th>z</th><th>20d change</th><th>range since {shape_first}</th>
     <th title="half the bid-offer near each point, summed">cost bp</th>
