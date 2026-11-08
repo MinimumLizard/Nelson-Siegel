@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline import db
-from signals import execution
+from signals import curve_shape, execution, zscore
 
 HORIZONS = (5, 10, 20)
 BUCKETS = [-np.inf, -3, -2, -1, 1, 2, 3, np.inf]
@@ -187,6 +187,78 @@ def execution_gap(conn) -> None:
           f"window\n  short: {execution.WINDOW_DAYS} days, chosen the same way.")
 
 
+# Random walks per spread for the chance comparison. 500 puts the reported
+# percentage within about 2 points of where a far larger run would.
+CHANCE_RUNS = 500
+
+
+def _shape_test(series, horizon):
+    """(corr of z with the next move, mean capture at |z| >= SIGNAL_Z)."""
+    z = zscore._rolling_z(series)["zscore"]
+    # Entered the day AFTER the signal, so one bad quote is not "reversion".
+    forward = series.shift(-(horizon + 1)) - series.shift(-1)
+    valid = z.notna() & forward.notna()
+    stretched = valid & (z.abs() >= curve_shape.SIGNAL_Z)
+    if valid.sum() < 10 or stretched.sum() == 0:
+        return float("nan"), float("nan")
+    capture = (-np.sign(z[stretched]) * forward[stretched]).mean()
+    return float(np.corrcoef(z[valid], forward[valid])[0, 1]), float(capture)
+
+
+def curve_shape_test(conn) -> None:
+    """Do stretched curve spreads come back by more than chance would give?
+
+    The comparison matters more than the raw number. Any series measured
+    against its own trailing average shows SOME pull back in a short
+    sample, random walks included, because a window that ends where the
+    series has wandered off is the window it is then compared with. So each
+    spread is set against random walks with the same daily volatility and
+    the same day-to-day persistence, and the line says how often chance
+    alone did as well. On a year of data that is the honest test.
+    """
+    frame = pd.read_sql_query(
+        "SELECT obs_date, pair, spread_bp, cost_bp FROM curve_spreads", conn)
+    if frame.empty:
+        return
+    frame["obs_date"] = pd.to_datetime(frame["obs_date"])
+    wide = frame.pivot(index="obs_date", columns="pair", values="spread_bp")
+    order = [curve_shape.pair_name(*pair) for pair in curve_shape.PAIRS
+             if curve_shape.pair_name(*pair) in wide]
+
+    print(f"\nCURVE SHAPE: long point less the 2-year, bp — monthly average")
+    print("  " + f"{'month':<9}" + "".join(f"{pair:>8}" for pair in order))
+    for month, group in wide.groupby(wide.index.to_period("M")):
+        print(f"  {str(month):<9}" + "".join(f"{group[pair].mean():>8.0f}" for pair in order))
+
+    rng = np.random.default_rng(0)
+    print(f"\n  stretched = {curve_shape.SIGNAL_Z:g} sd from its own "
+          f"{zscore.WINDOW_DAYS}-day norm, entered the next day | chance = "
+          f"how often a\n  random walk with the same daily moves did at least "
+          f"as well ({CHANCE_RUNS} runs)")
+    for pair in order:
+        series = wide[pair].dropna().reset_index(drop=True)
+        moves = series.diff().dropna()
+        persistence = moves.autocorr()
+        cost = frame.loc[frame["pair"] == pair, "cost_bp"].median()
+        lines = []
+        for horizon in HORIZONS:
+            correlation, capture = _shape_test(series, horizon)
+            beaten = 0
+            for _ in range(CHANCE_RUNS):
+                shocks = rng.normal(0.0, 1.0, len(series))
+                steps = np.empty_like(shocks)
+                steps[0] = shocks[0]
+                for i in range(1, len(shocks)):
+                    steps[i] = persistence * steps[i - 1] + shocks[i]
+                walk = pd.Series(np.cumsum(steps * moves.std() / steps.std()))
+                beaten += _shape_test(walk, horizon)[1] >= capture
+            lines.append(f"{horizon:>2}d corr {correlation:+.2f}, comes back "
+                         f"{capture:+5.1f}bp, chance {beaten / CHANCE_RUNS:4.0%}")
+        print(f"  {pair:<6} " + "\n         ".join(lines)
+              + f"\n         cost to trade it, half the bid-offer on each leg: "
+                f"{cost:.0f}bp")
+
+
 def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     conn = db.connect()
@@ -213,6 +285,7 @@ def main() -> None:
                 "SWITCH PAIRS: mean change in the pair spread (bp) after the signal")
 
     dispersion(conn)
+    curve_shape_test(conn)
     auction_cycle(conn)
     execution_gap(conn)
 
