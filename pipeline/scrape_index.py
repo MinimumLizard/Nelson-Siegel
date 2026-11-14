@@ -84,12 +84,16 @@ def parse_daily_index(html: bytes | str) -> list[IndexEntry]:
         for href, label in links.items():
             if href in seen:
                 continue
-            if "outright" in label.lower():
+            # Matched with the spaces taken out: 12 November 2026's volumes
+            # were labelled "O utright ...", and a strict match skipped the
+            # file with nothing but a warning.
+            squashed = "".join(label.lower().split())
+            if "outright" in squashed:
                 # The volumes label carries its own "as at" date.
                 entries.append(IndexEntry(href, "volumes",
                                           dates.parse_dmy(label), posted))
                 seen.add(href)
-            elif "summary repor" in label.lower():
+            elif "summaryrepor" in squashed:
                 # Matches "Daily Summary Report", the truncated
                 # "Daily Summary Repor", and "Amended Daily Summary Report".
                 entries.append(IndexEntry(href, "daily_summary", None, posted,

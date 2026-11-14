@@ -4,6 +4,7 @@ requests==2.34.2         # HTTP client for index pages + report downloads
 beautifulsoup4==4.15.0   # HTML parsing of the messy PDMO index pages
 pdfplumber==0.11.10      # table extraction from the trade-summary PDFs
 xlrd==2.0.2              # the "PDF" links actually serve legacy Excel .xls files
+openpyxl==3.1.5          # ...and .xlsx from 2026-11-13 on
 pandas==3.0.5            # tabular wrangling + the report command
 matplotlib==3.11.1       # yield/volume plots for the report command
 pytest==9.1.1            # sanity tests
