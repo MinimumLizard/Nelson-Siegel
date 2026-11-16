@@ -283,3 +283,30 @@ def test_a_dead_feed_is_never_read_as_a_quiet_market(seeded):
     assert data["trades_through"] == day          # the capped value, as designed
     assert build._trade_feed_lag(data) > 7        # but the truth is a dead feed
     assert f"no trade on {day}" not in build.render(data)
+
+
+def test_the_core_book_shows_where_each_bond_should_actually_deal(seeded):
+    """The quote is indicative; the `deal` column is the level to judge a
+    price against. Here every bond trades 20bp over its screen."""
+    for row in seeded.execute(
+            "SELECT obs_date, isin, tau_years, observed_yield FROM curve_residuals "
+            "WHERE source = 'quote'").fetchall():
+        seeded.execute(
+            """INSERT INTO curve_residuals (obs_date, isin, source, tau_years,
+                   observed_yield, fitted_yield, residual_bp, weight)
+               VALUES (?, ?, 'trade', ?, ?, 10.0, 20.0, 1.0)""",
+            (row["obs_date"], row["isin"], row["tau_years"],
+             row["observed_yield"] + 0.20))
+    seeded.commit()
+    data = build.gather(seeded)
+    assert data["dealing"]["market_gap_bp"] == pytest.approx(20.0)
+    page = " ".join(build.render(data).split())
+    assert ">deal</th>" in page
+    assert "<b>10.20</b>" in page             # quote 10.00, dealing 20bp over
+    assert "expected to actually trade at next" in page
+
+
+def test_the_page_still_builds_before_any_trade_has_been_seen(seeded):
+    data = build.gather(seeded)
+    assert data["dealing"] is None
+    assert ">deal</th>" in build.render(data)

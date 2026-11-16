@@ -1,4 +1,4 @@
-"""Parsers for the two daily .xls workbooks (never mutates anything on disk).
+"""Parsers for the two daily workbooks (never mutates anything on disk).
 
 Both parsers take a path to a cached file and return plain data
 (dataclasses of dates + lists of dicts). They know nothing about the
@@ -14,11 +14,13 @@ ISIN-encoded maturity, and the volumes observation date is *derived* from
 the remaining-years arithmetic because the file's own title lies.
 """
 
+import io
 import logging
 import re
 import statistics
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import xlrd
 
@@ -53,11 +55,76 @@ class Volumes:
     rows: list[dict] = field(default_factory=list)
 
 
+# The first four bytes of every .xlsx file: it is a zip archive. The PDMO
+# switched both daily workbooks from legacy .xls to .xlsx on 2026-11-13
+# (the 13 November quote sheet and the 12 November volumes), at the same
+# download links and with the same layout inside.
+XLSX_MAGIC = b"PK\x03\x04"
+EXCEL_EPOCH = datetime(1899, 12, 30)
+
+
 def _open_workbook(path):
+    content = Path(path).read_bytes()
+    is_xlsx = content[:4] == XLSX_MAGIC
     try:
-        return xlrd.open_workbook(str(path))
-    except Exception as error:  # xlrd raises many types; all mean "not ours"
-        raise ParseError(f"cannot open as .xls: {error}") from error
+        if is_xlsx:
+            import openpyxl  # local import: only the newer files need it
+            # Handed the bytes, not the path: openpyxl refuses a file by its
+            # extension, and the cache still names these downloads .xls.
+            return _XlsxBook(openpyxl.load_workbook(io.BytesIO(content),
+                                                    read_only=True, data_only=True))
+        return xlrd.open_workbook(file_contents=content)
+    except Exception as error:  # both readers raise many types; all mean "not ours"
+        kind = ".xlsx" if is_xlsx else ".xls"
+        raise ParseError(f"cannot open as {kind}: {error}") from error
+
+
+class _XlsxBook:
+    """An .xlsx workbook dressed up as the few xlrd calls the parsers make.
+
+    Wrapping the new format, rather than rewriting both parsers for it,
+    keeps one parsing path for every file: the years of .xls history and
+    the .xlsx files from 13 November 2026 on are read by the same code.
+    """
+
+    def __init__(self, book):
+        self._book = book
+
+    def sheet_by_name(self, name):
+        if name not in self._book.sheetnames:
+            raise xlrd.XLRDError(f"No sheet named <{name!r}>")
+        return _XlsxSheet(self._book[name])
+
+    def sheet_by_index(self, index):
+        return _XlsxSheet(self._book.worksheets[index])
+
+
+class _XlsxSheet:
+    """Rows as xlrd returns them: empty cells as '', dates as Excel serials.
+
+    The parsers find dates by looking for the LAST NUMBER on a labelled
+    row, which is what xlrd hands back for a date cell. openpyxl hands back
+    a datetime instead, and without converting it the REPORTING DATE row
+    would have no number on it at all.
+    """
+
+    def __init__(self, sheet):
+        self._rows = [[self._as_xlrd(cell) for cell in row]
+                      for row in sheet.iter_rows(values_only=True)]
+        self.nrows = len(self._rows)
+
+    @staticmethod
+    def _as_xlrd(cell):
+        if cell is None:
+            return ""
+        if isinstance(cell, datetime):
+            return (cell - EXCEL_EPOCH).total_seconds() / 86400.0
+        if isinstance(cell, date):
+            return float((cell - EXCEL_EPOCH.date()).days)
+        return cell
+
+    def row_values(self, row_number):
+        return list(self._rows[row_number])
 
 
 def _labelled_serial(sheet, label: str) -> float | None:

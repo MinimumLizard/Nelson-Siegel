@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import parse_daily, parse_trade_summary
+from pipeline import parse_daily, parse_trade_summary, scrape_index
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -91,6 +91,54 @@ def test_volumes_rows(volumes):
     assert first["volume_lkr"] == 495_000_000
     # File's own Total row says 10,390 mn.
     assert sum(r["volume_lkr"] for r in volumes.rows) == 10_390_000_000
+
+
+# ---------------------------------------------------------------------------
+# The same two workbooks as .xlsx (the PDMO's format from 2026-11-13)
+# ---------------------------------------------------------------------------
+
+def test_an_xlsx_daily_summary_parses_like_the_xls_ones():
+    # 13.11.2026, the first .xlsx. Its dates are real date cells, which
+    # openpyxl returns as datetimes; xlrd returned numbers, and the date
+    # lookup only reads numbers, so this is the conversion under test.
+    daily = parse_daily.parse_daily_summary(FIXTURES / "daily_summary_2026-11-13.xlsx")
+    assert daily.reporting_date == date(2026, 11, 13)
+    assert daily.trading_date == date(2026, 11, 12)
+    assert len(daily.quotes) == 92
+    assert daily.skipped_rows == 2
+    # 11.70%2034A as printed in the sheet: 0.120333 / 0.119056 as fractions.
+    quote = next(q for q in daily.quotes if q["series_label"] == "11.70%2034A")
+    assert quote["maturity_date"] == date(2034, 10, 15)
+    assert quote["bid_yield"] == pytest.approx(12.0333, abs=1e-3)
+    assert quote["offer_yield"] == pytest.approx(11.9056, abs=1e-3)
+
+
+def test_an_xlsx_volumes_file_parses_like_the_xls_ones():
+    volumes = parse_daily.parse_volumes(FIXTURES / "volumes_2026-11-12.xlsx")
+    assert volumes.derived_date == date(2026, 11, 12)
+    assert len(volumes.rows) == 20
+    # The sheet's own Total row: 11,272.41 Rs mn.
+    assert sum(r["volume_lkr"] for r in volumes.rows) == pytest.approx(
+        11_272_410_000, abs=10_000)
+
+
+def test_an_xlsx_file_still_parses_when_cached_under_a_xls_name(tmp_path):
+    """The download cache names every daily workbook .xls, and openpyxl
+    refuses a file by its extension. The content decides, not the name."""
+    cached = tmp_path / "f9ac0499.xls"
+    cached.write_bytes((FIXTURES / "daily_summary_2026-11-13.xlsx").read_bytes())
+    assert parse_daily.parse_daily_summary(cached).reporting_date == date(2026, 11, 13)
+
+
+def test_a_volumes_link_with_a_stray_space_is_still_recognised():
+    """12.11.2026's volumes were labelled "O utright ...", which a strict
+    match skipped with only a warning."""
+    html = ("<div><p>&gt; 13.11.2026 <a href='/api/file/abc'>O utright Treasury "
+            "Bond Transactions Volumes as at 12.11.2026</a> <a href='/api/file/def'>"
+            "Daily Summary Report</a></p></div>")
+    kinds = {entry.kind: entry for entry in scrape_index.parse_daily_index(html)}
+    assert kinds["volumes"].label_date == date(2026, 11, 12)
+    assert "daily_summary" in kinds
 
 
 # ---------------------------------------------------------------------------

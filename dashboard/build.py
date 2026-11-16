@@ -23,9 +23,9 @@ from curves import fit as curve_fit
 from curves import nelson_siegel as ns
 from dashboard import palette
 from pipeline import config, db
-from signals import carry, curve_shape, execution, liquidity, zscore
+from signals import carry, curve_shape, dealing, execution, liquidity, zscore
 from signals.report import (MAX_TRADEABLE_SPREAD_BP, _expected_capture,
-                            reversion_table)
+                            entry_gap, reversion_table)
 
 OUTPUT = Path("docs/index.html")
 CHART_WIDTH, CHART_HEIGHT = 880, 400
@@ -80,7 +80,10 @@ def gather(conn) -> dict | None:
     # Two market-wide facts a level depends on: where trades actually print
     # relative to the screen, and what it costs to fund a position.
     gap = execution.gap(conn, obs_date)
-    money = carry.profile(conn, obs_date, entry_gap_bp=gap["gap_bp"] if gap else 0.0)
+    # Where each bond is expected to actually deal next, and the market's
+    # part of that, which is what carry is entered at.
+    deals = dealing.forecast(conn, obs_date)
+    money = carry.profile(conn, obs_date, entry_gap_bp=entry_gap(deals, gap))
     funding = carry.funding_rate(conn, obs_date)
     reversion = reversion_table(conn)
     trades_through = liquidity.last_complete_trade_day(conn, obs_date) or obs_date
@@ -116,7 +119,7 @@ def gather(conn) -> dict | None:
         "spreads": spreads, "signals": signals, "switches": switches,
         "core": core, "others": others, "core_isins": core_isins,
         "waiting": waiting, "liquidity": facts, "labels": labels,
-        "carry": money, "funding": funding, "gap": gap,
+        "carry": money, "funding": funding, "gap": gap, "dealing": deals,
         "reversion": reversion, "quotes": quotes,
         "trades_through": trades_through, "carried_trades": carried_trades,
         "published_through": published_through,
@@ -576,7 +579,7 @@ def _signal_rows(signals, spreads, cheap: bool, limit=6, facts=None) -> str:
     return "".join(cells)
 
 
-def _core_rows(core, spreads, facts, money=None, quotes=None) -> str:
+def _core_rows(core, spreads, facts, money=None, quotes=None, deals=None) -> str:
     """The core book in full, cheapest at the top.
 
     Unlike the other tables this one is never trimmed. It is only ever a
@@ -620,10 +623,13 @@ def _core_rows(core, spreads, facts, money=None, quotes=None) -> str:
         # exactly the shape that once swallowed four cells when a value was
         # missing, so the branch is confined to the one cell it concerns.
         quote_cell = f"{quoted:.2f}" if quoted is not None else "–"
+        expected = ((deals or {}).get("bonds") or {}).get(row["isin"])
+        deal_cell = f'<b>{expected["expected_yield"]:.2f}</b>' if expected else "–"
         out.append(
             f'<tr><td>{html.escape(row["series_label"] or row["isin"])}</td>'
             f'<td>{quote_cell}</td>'
             f'<td>{traded}</td>'
+            f'<td>{deal_cell}</td>'
             f'<td>{gap:+.1f}</td><td>{row["zscore"]:.1f}</td>'
             f'<td>{spread_cell}</td>'
             f'{carry_cells}'
@@ -633,6 +639,33 @@ def _core_rows(core, spreads, facts, money=None, quotes=None) -> str:
             f'<td style="width:22%"><div class="bar {side}">'
             f'<span style="width:{share:.1f}%"></span></div></td></tr>')
     return "".join(out)
+
+
+def _dealing_note(data) -> str:
+    """What the `deal` column is and how far it has been from the truth."""
+    deals = data.get("dealing")
+    if not deals:
+        return ""
+    measured = ""
+    if deals.get("band50_bp") is not None:
+        measured = (f' Tested on every trade in this history, half of the next '
+                    f'day\'s trades landed within {deals["band50_bp"]:.0f}bp of it '
+                    f'and four in five within {deals["band80_bp"]:.0f}bp.')
+        if deals.get("screen_band50_bp") is not None:
+            measured += (f' For the screen quote that first figure is '
+                         f'{deals["screen_band50_bp"]:.0f}bp.')
+    stale = ("" if deals["fresh"] else
+             f' The trade file for {data["obs_date"]} is not in yet, so today\'s '
+             f'figures rest on trades to {deals["trades_through"]}.')
+    return (f'<p class="foot"><b>deal</b> is the yield this bond is expected to '
+            f'actually trade at next — the level to judge a price against, where '
+            f'<b>quote</b> is only the dealers\' indicative midpoint. It is the '
+            f'quote moved by how the bond\'s own last trade printed against its '
+            f'screen (fading over a few days) and by how the market\'s trades '
+            f'have, which has been {deals["market_gap_bp"]:+.0f}bp over the last '
+            f'{deals["market_window"]} trading days with trades.{measured}{stale} '
+            f'It is where the day\'s trades should average, not a price anyone '
+            f'must show, and not a view on where yields go next.</p>')
 
 
 def _waiting_note(waiting) -> str:
@@ -705,15 +738,23 @@ def render(data, fragment: bool = False) -> str:
                   if funding else "–")
     fund_note = (f'{funding["bill_pct"]:.2f}% 12m bill + {funding["spread_bp"]:.0f}bp'
                  if funding else "no recent bill print")
-    gap_value = (f'{gap["gap_bp"]:+.0f}<span style="font-size:15px">bp</span>'
-                 if gap else "–")
-    gap_note = (f'trades vs quote mid, last {gap["window_days"]}d' if gap
-                else "too few trades to measure")
+    deals = data.get("dealing")
+    if deals:
+        # The short window is the one that predicts the next trade; the
+        # 20-day figure stays beside it as the slower-moving background.
+        gap_value = f'{deals["market_gap_bp"]:+.0f}<span style="font-size:15px">bp</span>'
+        gap_note = (f'trades vs quote mid, last {deals["market_window"]} trading days'
+                    + (f' · {gap["gap_bp"]:+.0f} over {gap["window_days"]}d' if gap else ""))
+    elif gap:
+        gap_value = f'{gap["gap_bp"]:+.0f}<span style="font-size:15px">bp</span>'
+        gap_note = f'trades vs quote mid, last {gap["window_days"]}d'
+    else:
+        gap_value, gap_note = "–", "too few trades to measure"
     tiles = [
         ("core book", f'{len(core)}',
          f'benchmarks trading · Rs {core_turnover:.0f}bn in {liquidity.WINDOW_DAYS} days'),
         ("funding", fund_value, fund_note),
-        ("execution gap", gap_value, gap_note),
+        ("dealing gap", gap_value, gap_note),
         ("fit error", f'{fit["rmse_bp"]:.1f}<span style="font-size:15px">bp</span>',
          f'weighted RMSE over {fit["n_quotes"]} bonds'),
         ("vs executed trades", bias_value, bias_note),
@@ -738,10 +779,17 @@ def render(data, fragment: bool = False) -> str:
             '<th title="turnover over the last 60 days">Rs bn</th><th></th>')
     has_trades = any(r["source"] == "trade" for r in data["residuals"])
     trades_through = data.get("trades_through") or data["obs_date"]
-    gap_shift = (
-        f'over the last {gap["window_days"]} days trades printed {abs(gap["gap_bp"]):.0f}bp '
-        f'{"cheaper" if gap["gap_bp"] > 0 else "richer"} than the quote mid'
-        if gap else "at the quoted mid, there being too few trades to measure the gap")
+    if deals:
+        gap_shift = (
+            f'over the last {deals["market_window"]} trading days with trades they '
+            f'printed {abs(deals["market_gap_bp"]):.0f}bp '
+            f'{"above" if deals["market_gap_bp"] > 0 else "below"} the quote mid')
+    elif gap:
+        gap_shift = (
+            f'over the last {gap["window_days"]} days trades printed {abs(gap["gap_bp"]):.0f}bp '
+            f'{"above" if gap["gap_bp"] > 0 else "below"} the quote mid')
+    else:
+        gap_shift = "at the quoted mid, there being too few trades to measure the gap"
     core_table = (
         f'<table><thead><tr><th>series</th>'
         f'<th title="the day\'s indicative mid — a midpoint of the PDMO\'s AVERAGE '
@@ -749,6 +797,9 @@ def render(data, fragment: bool = False) -> str:
         f'on">quote</th>'
         f'<th title="where this bond last actually changed hands, and how long '
         f'ago">traded</th>'
+        f'<th title="where this bond is expected to actually trade next: its quote, '
+        f'moved by how its own last trade and the market\'s recent trades printed '
+        f'against the screen">deal</th>'
         f'<th>gap bp</th><th>z</th><th>b/o</th>'
         f'<th title="entry yield less the cost of funding, bp per year">carry</th>'
         f'<th title="price gain from ageing down the curve, bp per year">roll</th>'
@@ -758,7 +809,7 @@ def render(data, fragment: bool = False) -> str:
         f'<th title="days traded in the last {liquidity.WINDOW_DAYS}">days</th>'
         f'<th>auction</th><th title="bids over amount offered">cover</th><th></th>'
         f'</tr></thead><tbody>'
-        f'{_core_rows(core, data["spreads"], data["liquidity"], data.get("carry"), data.get("quotes"))}'
+        f'{_core_rows(core, data["spreads"], data["liquidity"], data.get("carry"), data.get("quotes"), deals)}'
         f'</tbody></table>'
         if core else
         f'<p class="empty">No current benchmark cleared the trading floor of '
@@ -820,6 +871,7 @@ def render(data, fragment: bool = False) -> str:
      decision can be executed in size. Shown in full rather than trimmed to the
      extremes: a benchmark sitting mid-pack is information too.</p>
   <div class="card">{core_table}</div>
+  {_dealing_note(data)}
   <p class="foot"><b>carry</b> is the entry yield less the cost of funding and
      <b>roll</b> the price gain from ageing down the curve, both bp per year;
      <b>per dur</b> is the two together per year of duration. Read that column,
@@ -828,8 +880,9 @@ def render(data, fragment: bool = False) -> str:
      ordering reverses, and today the whole book sits within a few bp of the
      same number — the curve is charging about the same for every year of risk
      on it. Carry is quoted at a realistic entry rather than the screen:
-     {gap_shift}. That shift is the same for every bond, so it moves the level
-     of carry and not the ordering.</p>
+     {gap_shift}. That shift is the same for every bond — the market's part of
+     the <b>deal</b> column, not each bond's own — so it moves the level of
+     carry and not the ordering.</p>
   <p class="foot"><b>Rs bn</b> and <b>days</b> are turnover and days traded over
      the {liquidity.WINDOW_DAYS} days to {trades_through}, the last day whose trade
      file has published — the quote columns run to {data["obs_date"]}, because the

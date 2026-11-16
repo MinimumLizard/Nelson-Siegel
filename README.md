@@ -430,6 +430,44 @@ trailing mean, so any offset that is stable for that bond divides out. What
 it does change is the yield you actually buy at, which is where carry
 starts.
 
+### The dealing level: where a bond should actually trade next
+
+That 20-day window was only ever tested against longer ones. Against
+shorter ones it loses badly, because the gap moves in days: +25bp on
+8 October, −25bp on 5 November. `signals/dealing.py` forecasts each bond's
+next dealing yield as its quote plus a blend of **the market's gap over the
+last 2 trading days** and **the bond's own last gap**, which counts in full
+if the bond traded on the latest day and half as much for every 2 trading
+days since. It is the `deal` column on the page and in `signals.txt`.
+
+Walk-forward over 1,856 bond-trades, each forecast using only quotes and
+trades from before the trade it is scored against:
+
+| forecast of tomorrow's executed yield | mean abs error | half within |
+|---|---|---|
+| the screen (quote mid) | 26.0bp | 18.7bp |
+| quote + 20-day market gap (the old rule) | 21.0bp | 14.2bp |
+| quote + 2-day market gap | 14.8bp | 10.0bp |
+| **blend with the bond's own last trade** | **12.4bp** | **7.7bp** |
+
+It holds on each half of the history separately (15.0bp against 24.9bp,
+then 10.1bp against 17.6bp), and when the trade file is a day behind it
+still scores 16.0bp against 21.6bp. A fitted regression on the same inputs
+did worse out of sample than the fixed rule, so the rule stayed simple.
+`python -m signals.validate` reruns all of it, and the error bands printed
+on the page are remeasured on every rebuild.
+
+The 20-day figure is still shown, as the slower background. Carry is
+entered at the market's 2-day gap, the same for every bond, so that a
+bond's own noisy last print cannot reorder the per-duration column.
+
+Two things this is **not**. It is where the day's trades should average,
+not a price a dealer must show. And it is not a view on where yields go:
+quotes do tend to follow trades (after trades printed 15bp or more above
+the screen, quotes rose an average 8bp over the next five days, 73% of the
+time, against no drift otherwise), but a fitted forecast of that did worse
+than "no change" out of sample, so nothing on the page uses it.
+
 ## Curve shape: 2s5s, 2s8s, 2s10s, 2s12s
 
 Everything above is one bond against the curve. These are the curve
