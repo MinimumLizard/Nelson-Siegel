@@ -39,6 +39,14 @@ each day's realised gap:
 
 Twenty days it is. That is still a 13bp standard error on a number that has
 ranged over 140bp, so it is an estimate of a regime, not a precise level.
+
+**That test only ever compared LONGER windows.** Against shorter ones 20
+days loses: predicting where a bond trades the next day it is 21.0bp out,
+where a 2-day window is 14.8bp and a blend with the bond's own last trade
+12.4bp. That forecast lives in `signals/dealing.py`, which is now what the
+`deal` column and the carry entry use. The 20-day figure here is kept as
+what it is good for — a description of the slower background the last few
+days sit against.
 """
 
 WINDOW_DAYS = 20           # trailing window; chosen by the test above

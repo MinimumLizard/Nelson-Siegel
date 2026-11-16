@@ -26,7 +26,7 @@ import argparse
 
 from curves import fit as curve_fit
 from pipeline import db
-from signals import carry, curve_shape, execution, liquidity, zscore
+from signals import carry, curve_shape, dealing, execution, liquidity, zscore
 
 # How far a pair spread has actually come back over the following 10 days,
 # per z threshold. NOT a constant: `signals.run` measures it from the stored
@@ -70,6 +70,36 @@ def _expected_capture(zscore: float, table: dict) -> float | None:
     return 0.0
 
 
+def entry_gap(deals: dict | None, gap: dict | None) -> float:
+    """The shift from screen to a realistic entry yield, for carry.
+
+    The market's part of the dealing forecast, and deliberately NOT each
+    bond's own: carry is compared across the book per year of duration,
+    where the whole book sits within a few bp, and a bond-specific
+    adjustment with a 12bp error would reorder that column with noise.
+    """
+    if deals:
+        return deals["market_gap_bp"]
+    return gap["gap_bp"] if gap else 0.0
+
+
+def describe_dealing(deals: dict, obs_date: str) -> str:
+    """One line for the report header: the market's part of the forecast."""
+    size = deals["market_gap_bp"]
+    days = deals["market_window"]
+    line = (f"expect trades {abs(size):.0f}bp "
+            f"{'above' if size > 0 else 'below'} the quote mid "
+            f"(last {days} trading day{'s' if days != 1 else ''} of trades, "
+            f"to {deals['trades_through']})")
+    if deals["band50_bp"] is not None:
+        line += (f"; half of next-day trades have landed within "
+                 f"{deals['band50_bp']:.0f}bp of the deal column, "
+                 f"four in five within {deals['band80_bp']:.0f}bp")
+    if not deals["fresh"]:
+        line += f"\n  (the trade file for {obs_date} is not in yet, so this is a day staler)"
+    return line
+
+
 def latest_date(conn) -> str | None:
     row = conn.execute("SELECT MAX(obs_date) AS d FROM bond_signals").fetchone()
     return row["d"] if row else None
@@ -111,6 +141,9 @@ def show(conn, obs_date: str, top: int) -> None:
 
     gap = execution.gap(conn, obs_date)
     print(f"execution: {execution.describe(gap)}")
+    deals = dealing.forecast(conn, obs_date)
+    if deals:
+        print(f"dealing: {describe_dealing(deals, obs_date)}")
     money = carry.funding_rate(conn, obs_date)
     if money:
         print(f"funding: {money['rate_pct']:.2f}% "
@@ -128,8 +161,7 @@ def show(conn, obs_date: str, top: int) -> None:
     trades_through = liquidity.last_complete_trade_day(conn, obs_date) or obs_date
     # Carry is quoted at a realistic entry, not the screen mid. The shift is
     # the same for every bond, so it moves the level and not the ranking.
-    money_facts = carry.profile(conn, obs_date,
-                                entry_gap_bp=gap["gap_bp"] if gap else 0.0)
+    money_facts = carry.profile(conn, obs_date, entry_gap_bp=entry_gap(deals, gap))
     tradeable = {isin for isin, spread in spreads.items()
                  if spread <= MAX_TRADEABLE_SPREAD_BP
                  and liquidity.is_tradeable(facts.get(isin))}
@@ -148,7 +180,8 @@ def show(conn, obs_date: str, top: int) -> None:
         if not subset:
             return
         print(f"\n{title}")
-        header = f"  {'series':<18}{'quote':>8}{'traded':>9}{'resid':>8}{'gap':>8}{'z':>7}{'b/o':>6}"
+        header = (f"  {'series':<18}{'quote':>8}{'traded':>10}{'deal':>7}{'resid':>8}"
+                  f"{'gap':>8}{'z':>7}{'b/o':>6}")
         if show_auction:                      # the core book carries more
             header += f"{'carry':>7}{'roll':>6}{'per dur':>9}"
         header += f"{'Rs bn':>8}{'days':>6}"
@@ -163,8 +196,13 @@ def show(conn, obs_date: str, top: int) -> None:
             done = fact.get("last_trade_yield")
             age = fact.get("days_since_trade")
             traded = (f"{done:.2f}" + (f"/{age}d" if age else "") if done else "-")
+            # `deal` is where the bond is expected to actually trade next:
+            # its quote moved by how trades have been printing against the
+            # screen. See signals/dealing.py for the test behind it.
+            expected = (deals or {}).get("bonds", {}).get(row["isin"])
+            deal = f"{expected['expected_yield']:.2f}" if expected else "-"
             line = (f"  {(row['series_label'] or row['isin']):<18}"
-                    f"{(f'{quoted:.2f}' if quoted else '-'):>8}{traded:>9}"
+                    f"{(f'{quoted:.2f}' if quoted else '-'):>8}{traded:>10}{deal:>7}"
                     f"{row['residual_bp']:>+8.1f}"
                     f"{row['dislocation_bp']:>+8.1f}{row['zscore']:>7.1f}"
                     f"{(f'{spread:.0f}' if spread else '-'):>6}")
@@ -259,8 +297,9 @@ def show(conn, obs_date: str, top: int) -> None:
     print("\nquote = the day's indicative mid, which is a midpoint of the PDMO's "
           "AVERAGE\nbuying and selling prices across dealers — not a level anyone "
           "must deal on\ntraded = where it last actually changed hands, and how "
-          "long ago. Executed\nlevels have been running well above the screen; "
-          "the bias line at the top\nmeasures that across the market."
+          "long ago\ndeal = where it is expected to trade next: its quote, moved "
+          "by its own last\ntrade against the screen (fading over a few days) and "
+          "by the market's"
           "\nresid = distance from the fitted curve, bp (positive = cheap) | gap = "
           "from its OWN\nrecent norm | z = that in its own standard deviations | "
           "cost = half the bid-offer\non each leg | exp = historical 10-day "

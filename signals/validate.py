@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline import db
-from signals import curve_shape, execution, zscore
+from signals import curve_shape, dealing, execution, zscore
 
 HORIZONS = (5, 10, 20)
 BUCKETS = [-np.inf, -3, -2, -1, 1, 2, 3, np.inf]
@@ -259,6 +259,81 @@ def curve_shape_test(conn) -> None:
                 f"{cost:.0f}bp")
 
 
+def dealing_test(conn) -> None:
+    """How close each way of guessing tomorrow's dealing yield has come.
+
+    Walk-forward: every forecast uses only quotes and trades from before
+    the trade it is scored against. See `signals/dealing.py`.
+    """
+    scored = dealing.backtest(conn)
+    if scored.empty:
+        return
+    summary = dealing.summarise(scored)
+    fresh = scored[scored["lag"] == 1]
+    print(f"\nDEALING LEVEL: tomorrow's executed yield, forecast against outcome"
+          f"\n  {len(fresh)} bond-trades from {fresh['obs_date'].min()} to "
+          f"{fresh['obs_date'].max()}, bp of yield")
+    print(f"  {'forecast':<42}{'mean abs error':>15}{'half within':>13}")
+    columns = (("the screen (quote mid)", "screen_error"),
+               ("quote + 20-day market gap (old rule)", "old_error"),
+               (f"quote + {dealing.MARKET_DAYS}-day market gap", "market_error"),
+               ("blend with the bond's own last trade", "error"))
+    for label, column in columns:
+        size = fresh[column].abs()
+        print(f"  {label:<42}{size.mean():>15.1f}{size.median():>13.1f}")
+    if 2 in summary:
+        print(f"  with the trade file a day behind: blend {summary[2]['mae_bp']:.1f}, "
+              f"old rule {summary[2]['old_mae_bp']:.1f}")
+
+    # The same comparison on each half, so a reader can see it is not one
+    # stretch of the history carrying the whole result.
+    days = sorted(fresh["obs_date"].unique())
+    cut = days[len(days) // 2]
+    for name, part in (("first half", fresh[fresh["obs_date"] < cut]),
+                       ("second half", fresh[fresh["obs_date"] >= cut])):
+        print(f"  {name:<12} blend {part['error'].abs().mean():>5.1f}   old rule "
+              f"{part['old_error'].abs().mean():>5.1f}   screen "
+              f"{part['screen_error'].abs().mean():>5.1f}   (n={len(part)})")
+
+    # How the error grows as a bond's own last trade ages.
+    print(f"  by age of the bond's own last trade (trading days):")
+    ages = pd.cut(fresh["own_age_days"].fillna(999), [-1, 0, 2, 5, 10_000],
+                  labels=["latest day", "1-2 days", "3-5 days", "older or never"])
+    for label, part in fresh.groupby(ages, observed=True):
+        size = part["error"].abs()
+        print(f"    {label:<16} mean {size.mean():>5.1f}   half within "
+              f"{size.median():>5.1f}   four in five within {size.quantile(.8):>5.1f}"
+              f"   (n={len(part)})")
+
+
+def screen_lag(conn) -> None:
+    """Do the dealers' quotes follow the trades?
+
+    When trades print well away from the screen, the screen tends to move
+    towards them over the following days. Split by the size of the gap
+    rather than fitted as a line: a straight-line forecast of the quote
+    change from the gap did worse than "no change" out of sample, so this
+    is shown as a tendency to be aware of and nothing on the page uses it.
+    """
+    mids, _, gaps = dealing.load_gaps(conn)
+    daily = gaps.median(axis=1).where(gaps.notna().sum(axis=1) >= 3)
+    recent = daily.rolling(dealing.MARKET_DAYS, min_periods=1).median()
+    print(f"\nSCREEN LAG: average change in quote mids after a trade gap, bp")
+    print(f"  {'trade gap that day':<22}{'next day':>10}{'5 days':>9}"
+          f"{'rose within 5d':>17}{'n':>6}")
+    change = {h: (mids.shift(-h) - mids).mean(axis=1) * 100.0 for h in (1, 5)}
+    for label, mask in (("+15bp or more", recent >= 15),
+                        ("within 15bp", recent.abs() < 15),
+                        ("-15bp or less", recent <= -15)):
+        mask = mask & change[5].notna()
+        if not mask.any():
+            print(f"  {label:<22}{'-':>10}{'-':>9}{'-':>17}{0:>6}")
+            continue
+        print(f"  {label:<22}{change[1][mask].mean():>+10.1f}{change[5][mask].mean():>+9.1f}"
+              f"{(change[5][mask] > 0).mean():>17.0%}{int(mask.sum()):>6}")
+    print("  (positive gap = trades printing at higher yields than the screen)")
+
+
 def main() -> None:
     argparse.ArgumentParser(description=__doc__).parse_args()
     conn = db.connect()
@@ -285,6 +360,8 @@ def main() -> None:
                 "SWITCH PAIRS: mean change in the pair spread (bp) after the signal")
 
     dispersion(conn)
+    dealing_test(conn)
+    screen_lag(conn)
     curve_shape_test(conn)
     auction_cycle(conn)
     execution_gap(conn)

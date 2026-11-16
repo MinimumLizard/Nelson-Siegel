@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline import db
-from signals import curve_shape, zscore
+from signals import curve_shape, dealing, zscore
 
 # Horizon and thresholds the report quotes a signal's worth at. Measured on
 # every rebuild rather than pasted in: the previous figures were taken on a
@@ -63,6 +63,9 @@ def rebuild(conn) -> dict:
               row.zscore, int(row.n_window)) for row in switches.itertuples()])
     measure_reversion(conn, switches)
     curve_rows = curve_shape.rebuild(conn)
+    # How far the dealing-level forecast has been from the trades that
+    # followed, remeasured so the bands on the page describe today's rule.
+    dealing.measure(conn)
     conn.commit()
     return {"bond_signals": len(bonds), "switch_signals": len(switches),
             "curve_spreads": curve_rows}
