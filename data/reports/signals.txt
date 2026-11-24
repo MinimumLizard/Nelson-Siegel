@@ -1,40 +1,38 @@
 
 LKR government bond relative value — 2026-11-23
-curve: 52 bonds, fit RMSE 5.5bp, lambda 2.82y
-vs executed trades: +9.6bp bias over 11 trades on 2026-11-20 (3d ago)
-execution: trades printing 5bp richer than the quote mid over the last 20 days (n=188)
-dealing: expect trades 5bp above the quote mid (last 2 trading days of trades, to 2026-11-20); half of next-day trades have landed within 10bp of the deal column, four in five within 23bp
-  (the trade file for 2026-11-23 is not in yet, so this is a day staler)
-funding: 9.97% = 9.92% 12m bill + 5bp (bill as of 2026-11-18)
+curve: 52 bonds, fit RMSE 5.5bp, lambda 2.82y; vs 7 trades bias -0.3bp
+vs executed trades: -0.3bp bias over 7 trades on 2026-11-23
+execution: trades printing 4bp richer than the quote mid over the last 20 days (n=195)
+dealing: expect trades 8bp above the quote mid (last 2 trading days of trades, to 2026-11-23); half of next-day trades have landed within 7bp of the deal column, four in five within 18bp
+funding: 10.06% = 10.01% 12m bill + 5bp
 
 === CORE BOOK — 8 auction benchmark(s), actually trading ===
 
 cheapest at the top, richest at the bottom
   series               quote    traded   deal   resid     gap      z   b/o  carry  roll  per dur   Rs bn  days   auction  cover
-  11.00%2029A          10.82  10.85/3d  10.93    -5.6    +2.4    0.8    21     91   +89       78    14.5    15       41d   4.2x
-  11.00%2030A          11.08  10.92/6d  11.10    -3.3    +0.3    0.1    21    116   +94       75    11.2    12       25d   2.4x
-  10.85%2036A          12.34  12.26/3d  12.42    +4.5    -0.1   -0.0    18    242   +58       54    20.7    17       25d   1.8x
-  11.50%2035A          12.21  11.90/4d  12.08    +8.1    -2.3   -0.8    15    229   +68       58     3.1    12       90d   5.7x
-  11.70%2034A          12.07  12.07/3d  12.19    +0.0    -3.5   -1.0    14    215   +71       58    61.9    39       25d   2.2x
-  11.60%2031A          11.31  11.00/6d  11.29    -2.1    -6.2   -1.1    15    139   +91       73    23.0    32      116d   2.9x
-  12.00%2031A          11.42  11.34/3d  11.48   -12.7    -6.5   -1.1    14    150   +86       67    19.4    25       41d   3.5x
-  10.00%2030A          11.16  10.98/6d  11.18    -1.9    -3.9   -1.2    17    124   +93       75    19.9    30       73d   1.5x
+  11.00%2029A          10.82  10.85/3d  10.92    -5.6    +2.4    0.8    21     85   +89       75    14.5    15       41d   4.2x
+  11.00%2030A          11.08  10.92/6d  11.13    -3.3    +0.3    0.1    21    110   +94       73    11.2    12       25d   2.4x
+  10.85%2036A          12.34     12.38  12.38    +4.5    -0.1   -0.0    18    236   +58       53    22.8    18       25d   1.8x
+  11.50%2035A          12.21  11.90/4d  12.15    +8.1    -2.3   -0.8    15    223   +68       57     3.1    12       90d   5.7x
+  11.70%2034A          12.07     12.07  12.07    +0.0    -3.5   -1.0    14    210   +71       57    58.2    37       25d   2.2x
+  11.60%2031A          11.31  11.00/6d  11.33    -2.1    -6.2   -1.1    15    133   +91       71    17.4    29      116d   2.9x
+  12.00%2031A          11.42     11.40  11.40   -12.7    -6.5   -1.1    14    144   +86       65    19.4    26       41d   3.5x
+  10.00%2030A          11.16     11.28  11.28    -1.9    -3.9   -1.2    17    118   +93       73    17.1    28       73d   1.5x
 
-=== ALSO TRADING — 11 liquid, but not on the run ===
+=== ALSO TRADING — 10 liquid, but not on the run ===
 
 cheap to their own norm
   series               quote    traded   deal   resid     gap      z   b/o   Rs bn  days
-  10.25%2034A          12.08 12.00/13d  12.13    +2.3    +4.3    1.0    17    21.8    14
-  11.00%2029B          10.91  10.75/4d  10.91    -6.4    +2.6    1.0    21     8.6    14
-  9.00%2033B           11.94  11.93/3d  12.12    +1.4    +3.0    0.8    17    35.6    28
-  10.75%2034A          12.07  12.03/3d  12.16    +4.4    +2.3    0.7    15    23.4    23
+  10.25%2034A          12.08 12.00/13d  12.16    +2.3    +4.3    1.0    17    21.8    14
+  11.00%2029B          10.91  10.75/4d  10.94    -6.4    +2.6    1.0    21     4.7    11
+  9.00%2033B           11.94  11.93/3d  12.09    +1.4    +3.0    0.8    17    32.9    25
+  10.75%2034A          12.07  12.03/3d  12.16    +4.4    +2.3    0.7    15    22.4    21
 
 rich to their own norm
   series               quote    traded   deal   resid     gap      z   b/o   Rs bn  days
-  10.70%2035A          12.20 12.05/11d  12.23    +3.5    -4.8   -2.0    16    14.2    11
-  9.00%2033A           11.82  11.57/6d  11.81    -3.6    -2.3   -0.8    24    19.6    18
-  11.50%2032A          11.69  11.63/3d  11.78    -7.5    -2.5   -0.5    15    30.9    27
-  11.20%2033           11.82  11.80/3d  12.01    +3.8    -1.1   -0.2    16    14.0    23
+  9.00%2033A           11.82     11.85  11.85    -3.6    -2.3   -0.8    24    17.4    16
+  11.50%2032A          11.69     11.70  11.70    -7.5    -2.5   -0.5    15    27.1    25
+  11.20%2033           11.82  11.80/3d  11.98    +3.8    -1.1   -0.2    16    13.7    21
 
 SWITCH CANDIDATES — both legs in the core book; buy the cheap, sell the rich
   buy                 sell                     gap      z   cost    exp  verdict
@@ -68,10 +66,10 @@ on each leg | exp = historical 10-day reversion at this z
 carry = entry yield less funding, bp p.a. | roll = price gain from ageing down
 the curve | per dur = the two together per year of duration, which is the only
 one of them that is not mostly a bet on duration
-Rs bn / days = turnover and days traded over the 60 days to 2026-11-20 — the last day
+Rs bn / days = turnover and days traded over the 60 days to 2026-11-23 — the last day
 whose trade file has published. The quote columns run to 2026-11-23; the two feeds
 publish on different clocks.
 auction = days since it was last sold | * = inside the 14-day post-auction window
-33 scored bond(s) not shown: quoted wider than 50bp, or traded on fewer than 10 of the last 60 days.
+34 scored bond(s) not shown: quoted wider than 50bp, or traded on fewer than 10 of the last 60 days.
 They stay IN the curve — it needs the whole cross-section to have a
 shape — but a dislocation you cannot deal on is not an opportunity.
